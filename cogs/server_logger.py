@@ -631,8 +631,16 @@ class ServerLogger(commands.Cog):
                     ],
                 )
 
-        before_timeout = getattr(before, "communication_disabled_until", None)
-        after_timeout = getattr(after, "communication_disabled_until", None)
+        before_timeout = getattr(
+            before,
+            "timed_out_until",
+            getattr(before, "communication_disabled_until", None),
+        )
+        after_timeout = getattr(
+            after,
+            "timed_out_until",
+            getattr(after, "communication_disabled_until", None),
+        )
         if before_timeout != after_timeout:
             who = await self._executor_tag(after.guild, ("member_update",), after.id)
             await self._send(
@@ -997,6 +1005,40 @@ class ServerLogger(commands.Cog):
                 ("Mute/Deaf", f"{before.mute}/{before.deaf} → {after.mute}/{after.deaf}", False),
                 ("Executor", who, False),
             ],
+        )
+
+    @commands.Cog.listener()
+    async def on_audit_log_entry_create(
+        self, entry: discord.AuditLogEntry
+    ) -> None:
+        guild = entry.guild
+        if guild is None:
+            return
+        target = getattr(entry.target, "id", None)
+        target_text = str(entry.target) if entry.target is not None else "Unknown"
+        await self._send(
+            guild.id,
+            "mod",
+            "🛡️ Audit Log Action",
+            str(entry.action),
+            discord.Color.dark_gold(),
+            [
+                ("Executor", f"{entry.user} ({entry.user.id})" if entry.user else "Unknown / unavailable", False),
+                ("Target", f"{target_text} ({target})" if target else target_text, False),
+                ("Reason", entry.reason or "No reason supplied", False),
+            ],
+        )
+        self._event(
+            "audit_log_action",
+            {
+                "guild_id": guild.id,
+                "action": str(entry.action),
+                "executor_id": getattr(entry.user, "id", None),
+                "executor": str(entry.user) if entry.user else None,
+                "target_id": target,
+                "target": target_text,
+                "reason": entry.reason,
+            },
         )
 
     @commands.Cog.listener()
