@@ -222,31 +222,29 @@ async def on_ready() -> None:
         logger.info("Categorized server logging is loaded.")
 
     try:
-        # Sync globally for normal Discord application commands.
-        synced = await bot.tree.sync()
-
-        # Also sync directly to each connected guild so newly-added commands
-        # appear immediately instead of waiting for global propagation.
-        guild_sync_counts: list[str] = []
+        # Remove any old guild-scoped copies created by a previous sync strategy.
+        # Commands are registered globally below, so each guild should have no
+        # duplicate local copies.
         for guild in bot.guilds:
             try:
-                bot.tree.copy_global_to(guild=guild)
-                guild_synced = await bot.tree.sync(guild=guild)
-                guild_sync_counts.append(f"{guild.name}: {len(guild_synced)}")
+                bot.tree.clear_commands(guild=guild)
+                await bot.tree.sync(guild=guild)
             except discord.HTTPException:
                 logger.exception(
-                    "Failed to sync guild slash commands for %s (%s).",
+                    "Failed to clear old guild slash commands for %s (%s).",
                     guild.name,
                     guild.id,
                 )
 
+        # Register the command tree globally once.
+        # Discord may take a short while to propagate global command changes,
+        # but this prevents duplicate global + guild command entries.
+        synced = await bot.tree.sync()
         logger.info(
             "Synced %d global slash command(s): %s",
             len(synced),
             ", ".join(f"/{command.name}" for command in synced),
         )
-        if guild_sync_counts:
-            logger.info("Guild slash-command sync: %s", " | ".join(guild_sync_counts))
     except discord.HTTPException:
         logger.exception("Failed to sync slash commands.")
 
