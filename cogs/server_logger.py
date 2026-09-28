@@ -344,7 +344,7 @@ class ServerLogger(commands.Cog):
         embed = discord.Embed(
             title=title,
             description="",
-            color=self._visual_color(title, log_type, color),
+            color=self._visual_color(title + " " + description, log_type, color),
             timestamp=datetime.now(timezone.utc),
         )
 
