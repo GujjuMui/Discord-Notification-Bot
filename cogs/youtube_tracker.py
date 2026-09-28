@@ -233,9 +233,10 @@ class YouTubeTracker(commands.Cog):
             logger.warning("RSS returned no entries for %s", yt_channel_id)
             return
 
-        # Each subscription has its own cursor because the same YouTube source
-        # may intentionally post to multiple Discord channels.
+        # Fetch the RSS feed once, then route each new video to every
+        # subscribed Discord target concurrently.
         oldest_first = list(reversed(videos))
+        pending: dict[str, list[dict[str, Any]]] = {}
 
         for subscription in subscriptions:
             guild_id = int(subscription["guild_id"])
@@ -265,8 +266,6 @@ class YouTubeTracker(commands.Cog):
                     if video["video_id"] == last_video_id
                 )
             except StopIteration:
-                # Cursor is outside the RSS window. Move forward without
-                # replaying the entire feed.
                 db.update_yt_last_video(
                     guild_id,
                     yt_channel_id,
@@ -275,11 +274,37 @@ class YouTubeTracker(commands.Cog):
                 )
                 continue
 
-            new_videos = oldest_first[cursor_index + 1:]
-            for video in new_videos:
-                sent = await self._send_notification(target_id, video)
-                if not sent:
-                    break
+            for video in oldest_first[cursor_index + 1:]:
+                pending.setdefault(video["video_id"], []).append(subscription)
+
+        for video in oldest_first:
+            targets = pending.get(video["video_id"], [])
+            if not targets:
+                continue
+
+            results = await asyncio.gather(
+                *[
+                    self._send_notification(
+                        int(subscription["discord_target_channel_id"]),
+                        video,
+                    )
+                    for subscription in targets
+                ],
+                return_exceptions=True,
+            )
+
+            for subscription, result in zip(targets, results):
+                if isinstance(result, Exception):
+                    logger.exception(
+                        "Failed dispatching video %s to Discord target %s",
+                        video["video_id"],
+                        subscription["discord_target_channel_id"],
+                        exc_info=result,
+                    )
+                    continue
+
+                if not result:
+                    continue
 
                 db.add_video(
                     video_id=video["video_id"],
@@ -293,9 +318,9 @@ class YouTubeTracker(commands.Cog):
                     notified=True,
                 )
                 db.update_yt_last_video(
-                    guild_id,
+                    int(subscription["guild_id"]),
                     yt_channel_id,
-                    target_id,
+                    int(subscription["discord_target_channel_id"]),
                     video["video_id"],
                 )
 
