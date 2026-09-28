@@ -53,7 +53,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "2.0.0"
+BOT_VERSION = "2.1.0"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
