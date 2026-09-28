@@ -165,11 +165,6 @@ class Database:
             if "notified_at" not in columns:
                 cursor.execute("ALTER TABLE videos ADD COLUMN notified_at TEXT")
 
-            if "ping_role_id" not in yt_columns:
-                cursor.execute(
-                    "ALTER TABLE yt_monitored_channels ADD COLUMN ping_role_id TEXT"
-                )
-
             message_columns = {
                 row["name"]
                 for row in cursor.execute("PRAGMA table_info(message_cache)").fetchall()
@@ -192,6 +187,13 @@ class Database:
                 "WHERE type = 'table' AND name = 'yt_monitored_channels'"
             ).fetchone()
             yt_sql = (yt_sql_row["sql"] or "") if yt_sql_row else ""
+
+            if "ping_role_id" not in yt_columns:
+                cursor.execute(
+                    "ALTER TABLE yt_monitored_channels ADD COLUMN ping_role_id TEXT"
+                )
+                yt_columns.add("ping_role_id")
+
             needs_yt_migration = (
                 "discord_target_channel_id" not in yt_columns
                 or "UNIQUE(guild_id, yt_channel_id)" in yt_sql
