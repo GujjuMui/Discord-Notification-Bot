@@ -422,7 +422,7 @@ class ServerLogger(commands.Cog):
                     channel.name,
                     guild.id,
                 )
-        logger.info("Message cache warm-up for %s: %s messages", guild.name, total)
+        logger.debug("Message cache warm-up for %s: %s messages", guild.name, total)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
