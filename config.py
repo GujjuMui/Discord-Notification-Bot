@@ -19,8 +19,10 @@ load_dotenv(ENV_FILE)
 
 DISCORD_BOT_TOKEN: Optional[str] = os.getenv("DISCORD_BOT_TOKEN")
 
+_owner_id = os.getenv("BOT_OWNER_ID", "").strip()
+
 try:
-    BOT_OWNER_ID: Optional[int] = int(os.getenv("BOT_OWNER_ID", "")) or None
+    BOT_OWNER_ID: Optional[int] = int(_owner_id) if _owner_id else None
 except ValueError as exc:
     raise ValueError("BOT_OWNER_ID must be a Discord user ID.") from exc
 
