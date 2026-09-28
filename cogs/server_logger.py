@@ -351,8 +351,11 @@ class ServerLogger(commands.Cog):
 
         for index, (name, value, _inline) in enumerate(source_fields):
             key = str(name).strip().lower()
-            if key in {"author", "user"} and author_value is None:
+            if key == "author" and author_value is None:
                 author_value = value
+                consumed.add(index)
+            elif key in {"user", "target"} and target_value is None:
+                target_value = value
                 consumed.add(index)
             elif key == "target" and target_value is None:
                 target_value = value
