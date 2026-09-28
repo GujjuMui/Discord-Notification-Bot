@@ -154,9 +154,8 @@ async def help_command(ctx: commands.Context) -> None:
         name="YouTube",
         value=(
             "/setup_logs <#channel>\n"
-            "/setup_yt <#channel>\n"
-            "/add_yt <url>\n"
-            "/remove_yt <url_or_id>\n"
+            "/add_yt <url> <#target_channel>\n"
+            "/remove_yt <url_or_id> [#target_channel]\n"
             "/list_yt\n"
             "/trust add <@user>\n"
             "/trust remove <@user>\n"
