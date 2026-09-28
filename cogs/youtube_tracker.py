@@ -453,7 +453,11 @@ class YouTubeTracker(commands.Cog):
             embed.set_image(url=video["thumbnail_url"])
         embed.set_footer(text="YouTube Notification Bot • New upload")
 
-        content = f"<@&{ping_role_id}> " if ping_role_id else ""
+        content = (
+            f"Hey <@&{ping_role_id}>! **{channel_name}** just uploaded a new video!"
+            if ping_role_id
+            else f"**{channel_name}** just uploaded a new video!"
+        )
         try:
             await channel.send(
                 content=content or None,
@@ -772,12 +776,14 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             if result["already_tracked"]:
                 message = (
                     f"**{result['channel_name']}** is already subscribed to "
-                    f"{target_channel.mention}."
+                    f"{target_channel.mention}"
+                    + (f" and pings {role.mention}." if role else ".")
                 )
             else:
                 message = (
                     f"✅ Subscribed **{result['channel_name']}** → "
-                    f"Notifications will post in {target_channel.mention}."
+                    f"Notifications will post in {target_channel.mention}"
+                    + (f" and ping {role.mention}." if role else ".")
                 )
 
             embed = discord.Embed(
