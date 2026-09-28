@@ -19,6 +19,11 @@ load_dotenv(ENV_FILE)
 
 DISCORD_BOT_TOKEN: Optional[str] = os.getenv("DISCORD_BOT_TOKEN")
 
+try:
+    BOT_OWNER_ID: Optional[int] = int(os.getenv("BOT_OWNER_ID", "")) or None
+except ValueError as exc:
+    raise ValueError("BOT_OWNER_ID must be a Discord user ID.") from exc
+
 _db_value = Path(os.getenv("DATABASE_PATH", "youtube_bot.db"))
 DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_value
 
