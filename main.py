@@ -113,6 +113,10 @@ async def on_ready() -> None:
     await resolve_bot_owner_id()
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
+    if server_logger:
+        logger.info(
+            "Categorized server logging is loaded. Use /setup_logs to configure routing."
+        )
 
     try:
         synced = await bot.tree.sync()
@@ -153,7 +157,7 @@ async def help_command(ctx: commands.Context) -> None:
     embed.add_field(
         name="YouTube",
         value=(
-            "/setup_logs <#channel>\n"
+            "/setup_logs [auto_create] [type] [#channel]\n"
             "/add_yt <url> <#target_channel>\n"
             "/remove_yt <url_or_id> [#target_channel]\n"
             "/list_yt\n"
