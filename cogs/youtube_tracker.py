@@ -6,6 +6,8 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+
+import psutil
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -53,6 +55,99 @@ CHANNEL_ID_PATTERNS = (
 )
 
 
+async def user_is_authorized(interaction: discord.Interaction) -> bool:
+    if not interaction.guild:
+        return False
+    owner_id = config.BOT_OWNER_ID
+    if owner_id is None:
+        try:
+            application = await interaction.client.application_info()
+            owner_id = application.owner.id if application.owner else None
+        except (discord.HTTPException, discord.Forbidden):
+            owner_id = None
+    return (
+        interaction.user.id == owner_id
+        or interaction.user.id == interaction.guild.owner_id
+        or db.is_trusted_user(interaction.guild.id, interaction.user.id)
+    )
+
+
+def _format_uptime(started_at: Optional[datetime]) -> str:
+    if not started_at:
+        return "Unknown"
+    seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f"{days}d {hours}h {minutes}m {seconds}s"
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, user_id: int, admin_view: bool):
+        self.user_id = user_id
+        self.admin_view = admin_view
+        options = [
+            discord.SelectOption(label="Overview & Getting Started", value="overview", emoji="🏠", description="Quick start guide and bot overview."),
+            discord.SelectOption(label="YouTube Feed Routing", value="youtube", emoji="📺", description="Add, remove, and list YouTube notification routes."),
+            discord.SelectOption(label=("Audit Logging Setup" if admin_view else "Audit Logging Setup 🔒 Admin/Trusted Required"), value="logging", emoji="📁", description="Configure the 8-channel server logging system."),
+            discord.SelectOption(label=("Trust & Permissions" if admin_view else "Trust & Permissions 🔒 Admin/Trusted Required"), value="trust", emoji="🛡️", description="Manage trusted users and administrative access."),
+            discord.SelectOption(label="System & Health", value="health", emoji="📊", description="View /botstatus and /about."),
+        ]
+        super().__init__(placeholder="Select a help category…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This help menu belongs to another user. Run /help to open your own.", ephemeral=True)
+            return
+
+        locked = not self.admin_view
+        embeds = {
+            "overview": discord.Embed(
+                title="🏠 Overview & Getting Started",
+                description="Discord Notification Bot combines YouTube feed routing with full categorized server audit logging.\n\nStart with /about for live bot information, then use /add_yt to route a YouTube channel into a Discord channel.",
+                color=discord.Color.blurple(),
+            ),
+            "youtube": discord.Embed(
+                title="📺 YouTube Feed Routing",
+                description="/add_yt <url> <#target_channel> — subscribe a YouTube source.\n/remove_yt <url_or_id> [#target_channel] — remove one route or all routes.\n/list_yt — view all configured routes.\n/ytinfo <url> — resolve a YouTube channel and inspect its RSS feed.",
+                color=discord.Color.red(),
+            ),
+            "logging": discord.Embed(
+                title="📁 Audit Logging Setup",
+                description=("🔒 Admin/Trusted Required\n\n" if locked else "") + "/setup_logs auto_create:True creates the final 8-channel logging system under 📁 SERVER LOGS.\n\nChannels: chat, member, profile, role, channel, server, voice, and moderation.",
+                color=discord.Color.gold(),
+            ),
+            "trust": discord.Embed(
+                title="🛡️ Trust & Permissions",
+                description=("🔒 Admin/Trusted Required\n\n" if locked else "") + "/trust add <@user>\n/trust remove <@user>\n/trust list\n\nAdministrative setup commands are restricted to the bot owner, server owner, and trusted users.",
+                color=discord.Color.green(),
+            ),
+            "health": discord.Embed(
+                title="📊 System & Health",
+                description="/botstatus — live operational dashboard (Admin/Trusted/Owner).\n/about — public bot profile with live server, feed, uptime, and latency stats.",
+                color=discord.Color.blue(),
+            ),
+        }
+        await interaction.response.send_message(embed=embeds[self.values[0]], ephemeral=True)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, user_id: int, admin_view: bool):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.add_item(HelpSelect(user_id, admin_view))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This help menu belongs to another user. Run /help to open your own.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+
+
 class YouTubeTracker(commands.Cog):
     """Poll YouTube RSS feeds and send one Discord notification per video."""
 
@@ -60,6 +155,7 @@ class YouTubeTracker(commands.Cog):
         self.bot = bot
         self.session: Optional[aiohttp.ClientSession] = None
         self._poll_lock = asyncio.Lock()
+        self._missing_target_alerted: set[tuple[int, int]] = set()
 
     async def cog_load(self) -> None:
         self.session = aiohttp.ClientSession(
@@ -276,6 +372,7 @@ class YouTubeTracker(commands.Cog):
                     self._send_notification(
                         int(subscription["discord_target_channel_id"]),
                         video,
+                        int(subscription["guild_id"]),
                     )
                     for subscription in targets
                 ],
@@ -314,18 +411,25 @@ class YouTubeTracker(commands.Cog):
                 )
 
     async def _send_notification(
-        self, discord_channel_id: int, video: dict[str, Any]
+        self,
+        discord_channel_id: int,
+        video: dict[str, Any],
+        guild_id: Optional[int] = None,
     ) -> bool:
         channel = self.bot.get_channel(discord_channel_id)
         if channel is None:
             try:
                 channel = await self.bot.fetch_channel(discord_channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                logger.error("Could not access Discord channel %s: %s", discord_channel_id, exc)
+                logger.error("YouTube target channel %s is unavailable: %s", discord_channel_id, exc)
+                if guild_id is not None:
+                    await self._notify_missing_target(guild_id, discord_channel_id)
                 return False
 
         if not hasattr(channel, "send"):
             logger.error("Discord channel %s is not sendable", discord_channel_id)
+            if guild_id is not None:
+                await self._notify_missing_target(guild_id, discord_channel_id)
             return False
 
         embed = discord.Embed(
@@ -348,7 +452,36 @@ class YouTubeTracker(commands.Cog):
             return True
         except (discord.Forbidden, discord.HTTPException) as exc:
             logger.error("Failed to send notification for %s: %s", video["video_id"], exc)
+            if guild_id is not None and isinstance(exc, discord.Forbidden):
+                await self._notify_missing_target(guild_id, discord_channel_id)
             return False
+
+    async def _notify_missing_target(self, guild_id: int, channel_id: int) -> None:
+        key = (guild_id, channel_id)
+        if key in self._missing_target_alerted:
+            return
+        self._missing_target_alerted.add(key)
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        message = (
+            f"⚠️ YouTube notification target <#{channel_id}> is unavailable or I cannot "
+            "send there. The route remains stored, but notifications will pause until "
+            "the target is restored or removed with /remove_yt."
+        )
+        try:
+            owner = guild.owner or await self.bot.fetch_user(guild.owner_id)
+            if owner:
+                await owner.send(message)
+                return
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning("Could not DM guild owner about missing YouTube target %s", channel_id)
+        fallback = guild.system_channel
+        if fallback and hasattr(fallback, "send"):
+            try:
+                await fallback.send(message)
+            except (discord.Forbidden, discord.HTTPException):
+                logger.warning("Could not use guild fallback channel for missing YouTube target %s", channel_id)
 
     @staticmethod
     def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -442,6 +575,83 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     bot.tree.add_command(trust_group)
+    @bot.tree.command(name="about", description="Learn about the bot and view live public statistics.")
+    async def about(interaction: discord.Interaction) -> None:
+        started_at = getattr(interaction.client, "bot_started_at", None)
+        uptime = _format_uptime(started_at)
+        latency = f"{round(interaction.client.latency * 1000)} ms" if interaction.client.latency >= 0 else "Unavailable"
+        feed_count = db.count_yt_feeds()
+        embed = discord.Embed(
+            title="🤖 Discord Notification Bot",
+            description="A production-focused Discord bot for YouTube feed routing and full categorized server audit logging.",
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="✨ Mission", value="Deliver reliable YouTube notifications while preserving detailed, organized server activity history.", inline=False)
+        embed.add_field(name="📺 YouTube Routing", value="RSS-based monitoring with per-server, per-channel Discord destinations.", inline=True)
+        embed.add_field(name="📁 Audit Logging", value="8 dedicated channels covering chat, members, profiles, roles, channels, server, voice, and moderation.", inline=True)
+        embed.add_field(name="📊 Live Stats", value=f"Servers: **{len(interaction.client.guilds)}**\nMonitored feeds: **{feed_count}**\nUptime: **{uptime}**\nGateway latency: **{latency}**", inline=False)
+        app_id = interaction.client.user.id if interaction.client.user else 0
+        invite = f"https://discord.com/oauth2/authorize?client_id={app_id}&scope=bot%20applications.commands&permissions=2147601408"
+        repo_url = "https://github.com/GujjuMui/Discord-Notification-Bot"
+        embed.add_field(name="🔗 Quick Links", value=f"[Support]({repo_url}/issues) • [Invite]({invite}) • [GitHub]({repo_url}) • [Docs]({repo_url}#readme)", inline=False)
+        embed.set_footer(text="v2.0.0 • Developed / powered by GujjuMui")
+        await interaction.response.send_message(embed=embed)
+
+
+    @bot.tree.command(name="help", description="Open the interactive public command guide.")
+    async def help_menu(interaction: discord.Interaction) -> None:
+        admin_view = await user_is_authorized(interaction)
+        embed = discord.Embed(
+            title="📖 Discord Notification Bot Help",
+            description="Choose a category below. This menu is user-scoped, so multiple users can use /help at the same time without affecting each other.\n\n🔒 Admin/Trusted badges mark restricted administrative features.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Quick Start", value="1. /about → overview\n2. /add_yt → add a YouTube route\n3. /setup_logs → configure audit logging", inline=False)
+        await interaction.response.send_message(embed=embed, view=HelpView(interaction.user.id, admin_view))
+
+
+    @bot.tree.command(name="botstatus", description="View the live bot health dashboard.")
+    @is_trusted_or_owner()
+    async def botstatus(interaction: discord.Interaction) -> None:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / (1024 * 1024)
+        cpu_percent = psutil.cpu_percent(interval=None)
+        latency_ms = interaction.client.latency * 1000
+        try:
+            database_messages = db.count_cached_messages()
+            feed_count = db.count_yt_feeds()
+            db_size_mb = db.database_size_bytes() / (1024 * 1024)
+            database_status = "🟢 Connected"
+        except Exception:
+            database_messages = feed_count = 0
+            db_size_mb = 0
+            database_status = "🔴 Error"
+            logger.exception("Health dashboard database check failed.")
+        rss_status = "🟡 No monitored feed configured"
+        if tracker:
+            monitored = db.get_yt_monitored_channels()
+            if monitored:
+                try:
+                    await tracker.fetch_feed(monitored[0]["yt_channel_id"])
+                    rss_status = "🟢 Reachable"
+                except Exception as exc:
+                    logger.warning("YouTube RSS health check failed: %s", exc)
+                    rss_status = "🔴 Unreachable"
+        gateway_status = "🟢 Connected" if interaction.client.is_ready() else "🔴 Disconnected"
+        embed = discord.Embed(
+            title="📊 System Health Dashboard",
+            description="Live operational health for the bot process.",
+            color=discord.Color.green() if gateway_status.startswith("🟢") and rss_status.startswith("🟢") else discord.Color.orange(),
+        )
+        embed.add_field(name="Discord", value=f"Gateway: **{gateway_status}**\nLatency: **{round(latency_ms)} ms**", inline=True)
+        embed.add_field(name="Runtime", value=f"Uptime: **{_format_uptime(getattr(interaction.client, 'bot_started_at', None))}**\nRAM: **{memory_mb:.1f} MB**\nCPU: **{cpu_percent:.1f}%**", inline=True)
+        embed.add_field(name="SQLite", value=f"Status: **{database_status}**\nMessages: **{database_messages:,}**\nYT feeds: **{feed_count:,}**\nSize: **{db_size_mb:.2f} MB**", inline=False)
+        embed.add_field(name="External API", value=f"YouTube RSS: **{rss_status}**\nDiscord Gateway: **{gateway_status}**", inline=False)
+        embed.set_footer(text="Admin / Trusted / Owner only")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
     @bot.tree.command(name="setup_logs", description="Create or map categorized server audit log channels.")
     @is_trusted_or_owner()
     @app_commands.describe(
