@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import asyncio
 import logging
 import sys
+from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -88,23 +87,17 @@ async def help_command(ctx: commands.Context) -> None:
     embed.add_field(
         name="YouTube",
         value=(
-            "`/addchannel <url>`
-"
-            "`/removechannel <channel_id>`
-"
-            "`/listchannels`
-"
-            "`/settarget <channel_id> <channel>`
-"
-            "`/pausechannel <channel_id>`
-"
-            "`/resumechannel <channel_id>`
-"
-            "`/ytinfo <url>`"
+            "/addchannel <url>\n"
+            "/removechannel <channel_id>\n"
+            "/listchannels\n"
+            "/settarget <channel_id> <channel>\n"
+            "/pausechannel <channel_id>\n"
+            "/resumechannel <channel_id>\n"
+            "/ytinfo <url>"
         ),
         inline=False,
     )
-    embed.add_field(name="Basic", value="`!ping`", inline=False)
+    embed.add_field(name="Basic", value="!ping", inline=False)
     await ctx.send(embed=embed)
 
 
