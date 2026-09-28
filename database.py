@@ -99,13 +99,14 @@ class Database:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS yt_monitored_channels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    guild_id INTEGER NOT NULL,
+                    guild_id TEXT NOT NULL,
                     yt_channel_id TEXT NOT NULL,
-                    yt_channel_name TEXT NOT NULL,
+                    yt_channel_name TEXT,
                     yt_channel_url TEXT NOT NULL,
+                    discord_target_channel_id TEXT NOT NULL,
                     last_video_id TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, yt_channel_id)
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, yt_channel_id, discord_target_channel_id)
                 )
             """)
 
@@ -134,6 +135,10 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_yt_monitored_channel ON yt_monitored_channels(yt_channel_id)"
             )
             cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_yt_monitored_route "
+                "ON yt_monitored_channels(guild_id, yt_channel_id, discord_target_channel_id)"
+            )
+            cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_message_cache_guild_channel ON message_cache(guild_id, channel_id)"
             )
 
@@ -143,6 +148,57 @@ class Database:
             }
             if "notified_at" not in columns:
                 cursor.execute("ALTER TABLE videos ADD COLUMN notified_at TEXT")
+
+            # Migrate the old guild-wide YouTube routing table to the new
+            # per-YouTube-channel/per-Discord-channel routing model.
+            yt_columns = {
+                row["name"]
+                for row in cursor.execute(
+                    "PRAGMA table_info(yt_monitored_channels)"
+                ).fetchall()
+            }
+            yt_sql_row = cursor.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'yt_monitored_channels'"
+            ).fetchone()
+            yt_sql = (yt_sql_row["sql"] or "") if yt_sql_row else ""
+            needs_yt_migration = (
+                "discord_target_channel_id" not in yt_columns
+                or "UNIQUE(guild_id, yt_channel_id)" in yt_sql
+            )
+
+            if needs_yt_migration:
+                cursor.execute("ALTER TABLE yt_monitored_channels RENAME TO yt_monitored_channels_legacy")
+                cursor.execute("""
+                    CREATE TABLE yt_monitored_channels (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        yt_channel_id TEXT NOT NULL,
+                        yt_channel_name TEXT,
+                        yt_channel_url TEXT NOT NULL,
+                        discord_target_channel_id TEXT NOT NULL,
+                        last_video_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(guild_id, yt_channel_id, discord_target_channel_id)
+                    )
+                """)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO yt_monitored_channels
+                        (guild_id, yt_channel_id, yt_channel_name, yt_channel_url,
+                         discord_target_channel_id, last_video_id, created_at)
+                    SELECT
+                        legacy.guild_id,
+                        legacy.yt_channel_id,
+                        legacy.yt_channel_name,
+                        legacy.yt_channel_url,
+                        COALESCE(CAST(gs.yt_notification_channel_id AS TEXT), '0'),
+                        legacy.last_video_id,
+                        legacy.created_at
+                    FROM yt_monitored_channels_legacy AS legacy
+                    LEFT JOIN guild_settings AS gs
+                        ON gs.guild_id = legacy.guild_id
+                """)
+                cursor.execute("DROP TABLE yt_monitored_channels_legacy")
 
     # Trusted users / RBAC -----------------------------------------------
 
@@ -222,31 +278,56 @@ class Database:
         yt_channel_id: str,
         yt_channel_name: str,
         yt_channel_url: str,
+        discord_target_channel_id: int,
         last_video_id: Optional[str] = None,
     ) -> bool:
         with self._cursor() as cursor:
             cursor.execute("""
                 INSERT INTO yt_monitored_channels
-                    (guild_id, yt_channel_id, yt_channel_name, yt_channel_url, last_video_id)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(guild_id, yt_channel_id) DO UPDATE SET
+                    (guild_id, yt_channel_id, yt_channel_name, yt_channel_url,
+                     discord_target_channel_id, last_video_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, yt_channel_id, discord_target_channel_id)
+                DO UPDATE SET
                     yt_channel_name = excluded.yt_channel_name,
-                    yt_channel_url = excluded.yt_channel_url
+                    yt_channel_url = excluded.yt_channel_url,
+                    last_video_id = COALESCE(
+                        yt_monitored_channels.last_video_id,
+                        excluded.last_video_id
+                    )
             """, (
-                guild_id,
+                str(guild_id),
                 yt_channel_id,
                 yt_channel_name,
                 yt_channel_url,
+                str(discord_target_channel_id),
                 last_video_id,
             ))
             return cursor.rowcount > 0
 
-    def remove_yt_monitored_channel(self, guild_id: int, yt_channel_id: str) -> bool:
+    def remove_yt_monitored_channel(
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        discord_target_channel_id: Optional[int] = None,
+    ) -> bool:
         with self._cursor() as cursor:
-            cursor.execute("""
-                DELETE FROM yt_monitored_channels
-                WHERE guild_id = ? AND yt_channel_id = ?
-            """, (guild_id, yt_channel_id))
+            if discord_target_channel_id is None:
+                cursor.execute("""
+                    DELETE FROM yt_monitored_channels
+                    WHERE guild_id = ? AND yt_channel_id = ?
+                """, (str(guild_id), yt_channel_id))
+            else:
+                cursor.execute("""
+                    DELETE FROM yt_monitored_channels
+                    WHERE guild_id = ?
+                      AND yt_channel_id = ?
+                      AND discord_target_channel_id = ?
+                """, (
+                    str(guild_id),
+                    yt_channel_id,
+                    str(discord_target_channel_id),
+                ))
             return cursor.rowcount > 0
 
     def get_yt_monitored_channels(
@@ -256,41 +337,75 @@ class Database:
             if guild_id is None:
                 rows = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
-                           yt_channel_url, last_video_id, created_at
+                           yt_channel_url, discord_target_channel_id,
+                           last_video_id, created_at
                     FROM yt_monitored_channels
-                    ORDER BY guild_id, yt_channel_name
+                    ORDER BY guild_id, yt_channel_name, discord_target_channel_id
                 """).fetchall()
             else:
                 rows = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
-                           yt_channel_url, last_video_id, created_at
+                           yt_channel_url, discord_target_channel_id,
+                           last_video_id, created_at
                     FROM yt_monitored_channels
                     WHERE guild_id = ?
-                    ORDER BY yt_channel_name
-                """, (guild_id,)).fetchall()
+                    ORDER BY yt_channel_name, discord_target_channel_id
+                """, (str(guild_id),)).fetchall()
             return [dict(row) for row in rows]
 
     def get_yt_monitored_channel(
-        self, guild_id: int, yt_channel_id: str
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        discord_target_channel_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         with self._cursor() as cursor:
-            row = cursor.execute("""
-                SELECT id, guild_id, yt_channel_id, yt_channel_name,
-                       yt_channel_url, last_video_id, created_at
-                FROM yt_monitored_channels
-                WHERE guild_id = ? AND yt_channel_id = ?
-            """, (guild_id, yt_channel_id)).fetchone()
+            if discord_target_channel_id is None:
+                row = cursor.execute("""
+                    SELECT id, guild_id, yt_channel_id, yt_channel_name,
+                           yt_channel_url, discord_target_channel_id,
+                           last_video_id, created_at
+                    FROM yt_monitored_channels
+                    WHERE guild_id = ? AND yt_channel_id = ?
+                    ORDER BY id
+                    LIMIT 1
+                """, (str(guild_id), yt_channel_id)).fetchone()
+            else:
+                row = cursor.execute("""
+                    SELECT id, guild_id, yt_channel_id, yt_channel_name,
+                           yt_channel_url, discord_target_channel_id,
+                           last_video_id, created_at
+                    FROM yt_monitored_channels
+                    WHERE guild_id = ?
+                      AND yt_channel_id = ?
+                      AND discord_target_channel_id = ?
+                """, (
+                    str(guild_id),
+                    yt_channel_id,
+                    str(discord_target_channel_id),
+                )).fetchone()
             return dict(row) if row else None
 
     def update_yt_last_video(
-        self, guild_id: int, yt_channel_id: str, video_id: str
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        discord_target_channel_id: int,
+        video_id: str,
     ) -> bool:
         with self._cursor() as cursor:
             cursor.execute("""
                 UPDATE yt_monitored_channels
                 SET last_video_id = ?
-                WHERE guild_id = ? AND yt_channel_id = ?
-            """, (video_id, guild_id, yt_channel_id))
+                WHERE guild_id = ?
+                  AND yt_channel_id = ?
+                  AND discord_target_channel_id = ?
+            """, (
+                video_id,
+                str(guild_id),
+                yt_channel_id,
+                str(discord_target_channel_id),
+            ))
             return cursor.rowcount > 0
 
     # Persistent message cache -------------------------------------------
