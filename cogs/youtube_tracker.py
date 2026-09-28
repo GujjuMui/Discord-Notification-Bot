@@ -442,15 +442,76 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     bot.tree.add_command(trust_group)
-    @bot.tree.command(name="setup_logs", description="Set this server's audit log channel.")
+    @bot.tree.command(name="setup_logs", description="Create or map categorized server audit log channels.")
     @is_trusted_or_owner()
-    @app_commands.describe(channel="Channel where server audit logs will be posted")
-    async def setup_logs(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    @app_commands.describe(
+        auto_create="Create the 📁 SERVER LOGS category and all 8 log channels automatically.",
+        log_type="For manual mapping: chat/member/profile/role/channel/server/voice/mod.",
+        channel="Existing text channel to use for the selected log type.",
+    )
+    @app_commands.choices(
+        log_type=[
+            app_commands.Choice(name="chat", value="chat"),
+            app_commands.Choice(name="member", value="member"),
+            app_commands.Choice(name="profile", value="profile"),
+            app_commands.Choice(name="role", value="role"),
+            app_commands.Choice(name="channel", value="channel"),
+            app_commands.Choice(name="server", value="server"),
+            app_commands.Choice(name="voice", value="voice"),
+            app_commands.Choice(name="mod", value="mod"),
+        ]
+    )
+    async def setup_logs(
+        interaction: discord.Interaction,
+        auto_create: bool = True,
+        log_type: Optional[app_commands.Choice[str]] = None,
+        channel: Optional[discord.TextChannel] = None,
+    ) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
             return
-        db.set_audit_log_channel(interaction.guild.id, channel.id)
-        await interaction.response.send_message(f"Audit logs will now be sent to {channel.mention}.", ephemeral=True)
+
+        server_logger = interaction.client.get_cog("ServerLogger")
+        if server_logger is None:
+            await interaction.response.send_message(
+                "❌ Server logger is not loaded.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            result = await server_logger.configure_logs(
+                interaction.guild,
+                auto_create=auto_create,
+                log_type=log_type.value if log_type else None,
+                channel=channel,
+            )
+        except (ValueError, discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+            await interaction.response.send_message(
+                f"❌ Could not configure server logs: {exc}",
+                ephemeral=True,
+            )
+            return
+
+        if auto_create:
+            mentions = "\n".join(
+                f"• **{key}** → {value.mention}"
+                for key, value in result.items()
+            )
+            await interaction.response.send_message(
+                "✅ **Server logging configured.**\n"
+                "Created/linked the categorized logging channels:\n" + mentions,
+                ephemeral=True,
+            )
+        else:
+            mapped = next(iter(result.values()))
+            await interaction.response.send_message(
+                f"✅ **{log_type.value if log_type else 'log'}** logs will now go to {mapped.mention}.",
+                ephemeral=True,
+            )
 
     @bot.tree.command(name="add_yt", description="Register a YouTube channel and its Discord notification destination.")
     @is_trusted_or_owner()
