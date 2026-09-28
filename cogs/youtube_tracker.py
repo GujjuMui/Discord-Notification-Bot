@@ -509,7 +509,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         else:
             mapped = next(iter(result.values()))
             await interaction.response.send_message(
-                f"✅ **{log_type.value if log_type else 'log'}** logs will now go to {mapped.mention}.",
+                f"✅ **{type.value if type else 'log'}** logs will now go to {mapped.mention}.",
                 ephemeral=True,
             )
 
