@@ -121,6 +121,7 @@ class Database:
                     yt_channel_name TEXT,
                     yt_channel_url TEXT NOT NULL,
                     discord_target_channel_id TEXT NOT NULL,
+                    ping_role_id TEXT,
                     last_video_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(guild_id, yt_channel_id, discord_target_channel_id)
@@ -164,6 +165,11 @@ class Database:
             if "notified_at" not in columns:
                 cursor.execute("ALTER TABLE videos ADD COLUMN notified_at TEXT")
 
+            if "ping_role_id" not in yt_columns:
+                cursor.execute(
+                    "ALTER TABLE yt_monitored_channels ADD COLUMN ping_role_id TEXT"
+                )
+
             message_columns = {
                 row["name"]
                 for row in cursor.execute("PRAGMA table_info(message_cache)").fetchall()
@@ -205,6 +211,7 @@ class Database:
                         yt_channel_name TEXT,
                         yt_channel_url TEXT NOT NULL,
                         discord_target_channel_id TEXT NOT NULL,
+                        ping_role_id TEXT,
                         last_video_id TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(guild_id, yt_channel_id, discord_target_channel_id)
@@ -371,18 +378,20 @@ class Database:
         yt_channel_name: str,
         yt_channel_url: str,
         discord_target_channel_id: int,
+        ping_role_id: Optional[int] = None,
         last_video_id: Optional[str] = None,
     ) -> bool:
         with self._cursor() as cursor:
             cursor.execute("""
                 INSERT INTO yt_monitored_channels
                     (guild_id, yt_channel_id, yt_channel_name, yt_channel_url,
-                     discord_target_channel_id, last_video_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                     discord_target_channel_id, ping_role_id, last_video_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(guild_id, yt_channel_id, discord_target_channel_id)
                 DO UPDATE SET
                     yt_channel_name = excluded.yt_channel_name,
                     yt_channel_url = excluded.yt_channel_url,
+                    ping_role_id = excluded.ping_role_id,
                     last_video_id = COALESCE(
                         yt_monitored_channels.last_video_id,
                         excluded.last_video_id
@@ -393,6 +402,7 @@ class Database:
                 yt_channel_name,
                 yt_channel_url,
                 str(discord_target_channel_id),
+                str(ping_role_id) if ping_role_id else None,
                 last_video_id,
             ))
             return cursor.rowcount > 0
@@ -429,7 +439,7 @@ class Database:
             if guild_id is None:
                 rows = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
-                           yt_channel_url, discord_target_channel_id,
+                           yt_channel_url, discord_target_channel_id, ping_role_id,
                            last_video_id, created_at
                     FROM yt_monitored_channels
                     ORDER BY guild_id, yt_channel_name, discord_target_channel_id
@@ -437,7 +447,7 @@ class Database:
             else:
                 rows = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
-                           yt_channel_url, discord_target_channel_id,
+                           yt_channel_url, discord_target_channel_id, ping_role_id,
                            last_video_id, created_at
                     FROM yt_monitored_channels
                     WHERE guild_id = ?
