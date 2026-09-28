@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import asyncio
 import logging
 import sys
@@ -27,7 +29,7 @@ bot = commands.Bot(
     help_command=None,
 )
 
-tracker: YouTubeTracker | None = None
+tracker: Optional[YouTubeTracker] = None
 
 
 async def setup_bot() -> None:
