@@ -357,9 +357,6 @@ class ServerLogger(commands.Cog):
             elif key in {"user", "target"} and target_value is None:
                 target_value = value
                 consumed.add(index)
-            elif key == "target" and target_value is None:
-                target_value = value
-                consumed.add(index)
             elif key == "channel" and channel_value is None:
                 channel_value = value
                 consumed.add(index)
