@@ -95,7 +95,7 @@ class ServerLogger(commands.Cog):
         log_type: Optional[str] = None,
         channel: Optional[discord.TextChannel] = None,
     ) -> dict[str, discord.TextChannel]:
-        """Create/map the categorized logging channels and persist their IDs."""
+        """Create/map the final categorized logging channels and persist their IDs."""
         me = guild.me
         if me is None:
             raise RuntimeError("The bot is not ready in this server.")
@@ -139,8 +139,6 @@ class ServerLogger(commands.Cog):
                 mod_log_id=result["mod"].id,
                 enabled=True,
             )
-            # Keep the legacy primary channel setting as a compatibility fallback.
-            db.set_audit_log_channel(guild.id, result["mod"].id)
             return result
 
         if log_type is None or channel is None:
@@ -172,8 +170,6 @@ class ServerLogger(commands.Cog):
         }
         values[LOG_COLUMNS[log_type]] = channel.id
         db.set_guild_log_channels(guild.id, enabled=True, **values)
-        if not current.get("mod_log_id"):
-            db.set_audit_log_channel(guild.id, channel.id)
 
         return {log_type: channel}
 
@@ -195,7 +191,7 @@ class ServerLogger(commands.Cog):
             if specific:
                 candidate_ids.append(int(specific))
 
-            # General fallback: moderation log, then any configured log channel.
+            # General fallback: moderation log, then another configured log channel.
             for key in (
                 "mod_log_id",
                 "chat_log_id",
@@ -209,12 +205,6 @@ class ServerLogger(commands.Cog):
                 value = settings.get(key)
                 if value and int(value) not in candidate_ids:
                     candidate_ids.append(int(value))
-
-        legacy = db.get_guild_settings(guild_id)
-        if legacy and legacy.get("audit_log_channel_id"):
-            value = int(legacy["audit_log_channel_id"])
-            if value not in candidate_ids:
-                candidate_ids.append(value)
 
         for channel_id in candidate_ids:
             channel = self.bot.get_channel(channel_id)
