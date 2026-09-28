@@ -97,6 +97,23 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS guild_log_channels (
+                    guild_id INTEGER PRIMARY KEY,
+                    category_id INTEGER,
+                    chat_log_id INTEGER,
+                    member_log_id INTEGER,
+                    profile_log_id INTEGER,
+                    role_log_id INTEGER,
+                    channel_log_id INTEGER,
+                    server_log_id INTEGER,
+                    voice_log_id INTEGER,
+                    mod_log_id INTEGER,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS yt_monitored_channels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id TEXT NOT NULL,
@@ -115,10 +132,12 @@ class Database:
                     message_id INTEGER PRIMARY KEY,
                     guild_id INTEGER NOT NULL,
                     channel_id INTEGER NOT NULL,
+                    author_id INTEGER,
                     author_tag TEXT NOT NULL,
                     content TEXT NOT NULL DEFAULT '',
                     attachments TEXT NOT NULL DEFAULT '[]',
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    deleted_at TEXT
                 )
             """)
 
@@ -144,6 +163,15 @@ class Database:
             }
             if "notified_at" not in columns:
                 cursor.execute("ALTER TABLE videos ADD COLUMN notified_at TEXT")
+
+            message_columns = {
+                row["name"]
+                for row in cursor.execute("PRAGMA table_info(message_cache)").fetchall()
+            }
+            if "author_id" not in message_columns:
+                cursor.execute("ALTER TABLE message_cache ADD COLUMN author_id INTEGER")
+            if "deleted_at" not in message_columns:
+                cursor.execute("ALTER TABLE message_cache ADD COLUMN deleted_at TEXT")
 
             # Migrate the old guild-wide YouTube routing table to the new
             # per-YouTube-channel/per-Discord-channel routing model.
@@ -278,6 +306,58 @@ class Database:
                 SELECT guild_id, audit_log_channel_id,
                        yt_notification_channel_id, updated_at
                 FROM guild_settings
+                WHERE guild_id = ?
+            """, (guild_id,)).fetchone()
+            return dict(row) if row else None
+
+    # Categorized server log channels ------------------------------------
+
+    def set_guild_log_channels(
+        self,
+        guild_id: int,
+        category_id: Optional[int] = None,
+        chat_log_id: Optional[int] = None,
+        member_log_id: Optional[int] = None,
+        profile_log_id: Optional[int] = None,
+        role_log_id: Optional[int] = None,
+        channel_log_id: Optional[int] = None,
+        server_log_id: Optional[int] = None,
+        voice_log_id: Optional[int] = None,
+        mod_log_id: Optional[int] = None,
+        enabled: bool = True,
+    ) -> None:
+        with self._cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO guild_log_channels
+                    (guild_id, category_id, chat_log_id, member_log_id,
+                     profile_log_id, role_log_id, channel_log_id,
+                     server_log_id, voice_log_id, mod_log_id, enabled, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    category_id = COALESCE(excluded.category_id, guild_log_channels.category_id),
+                    chat_log_id = COALESCE(excluded.chat_log_id, guild_log_channels.chat_log_id),
+                    member_log_id = COALESCE(excluded.member_log_id, guild_log_channels.member_log_id),
+                    profile_log_id = COALESCE(excluded.profile_log_id, guild_log_channels.profile_log_id),
+                    role_log_id = COALESCE(excluded.role_log_id, guild_log_channels.role_log_id),
+                    channel_log_id = COALESCE(excluded.channel_log_id, guild_log_channels.channel_log_id),
+                    server_log_id = COALESCE(excluded.server_log_id, guild_log_channels.server_log_id),
+                    voice_log_id = COALESCE(excluded.voice_log_id, guild_log_channels.voice_log_id),
+                    mod_log_id = COALESCE(excluded.mod_log_id, guild_log_channels.mod_log_id),
+                    enabled = excluded.enabled,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                guild_id, category_id, chat_log_id, member_log_id,
+                profile_log_id, role_log_id, channel_log_id, server_log_id,
+                voice_log_id, mod_log_id, 1 if enabled else 0,
+            ))
+
+    def get_guild_log_channels(self, guild_id: int) -> Optional[Dict[str, Any]]:
+        with self._cursor() as cursor:
+            row = cursor.execute("""
+                SELECT guild_id, category_id, chat_log_id, member_log_id,
+                       profile_log_id, role_log_id, channel_log_id,
+                       server_log_id, voice_log_id, mod_log_id, enabled, updated_at
+                FROM guild_log_channels
                 WHERE guild_id = ?
             """, (guild_id,)).fetchone()
             return dict(row) if row else None
@@ -431,28 +511,26 @@ class Database:
         content: str,
         attachments: List[str],
         timestamp: str,
+        author_id: Optional[int] = None,
     ) -> None:
         payload = json.dumps(attachments, ensure_ascii=False)
         with self._cursor() as cursor:
             cursor.execute("""
                 INSERT INTO message_cache
-                    (message_id, guild_id, channel_id, author_tag, content, attachments, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (message_id, guild_id, channel_id, author_id, author_tag,
+                     content, attachments, timestamp, deleted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(message_id) DO UPDATE SET
                     guild_id = excluded.guild_id,
                     channel_id = excluded.channel_id,
+                    author_id = excluded.author_id,
                     author_tag = excluded.author_tag,
                     content = excluded.content,
                     attachments = excluded.attachments,
                     timestamp = excluded.timestamp
             """, (
-                message_id,
-                guild_id,
-                channel_id,
-                author_tag,
-                content or "",
-                payload,
-                timestamp,
+                message_id, guild_id, channel_id, author_id, author_tag,
+                content or "", payload, timestamp,
             ))
 
     @staticmethod
@@ -467,8 +545,8 @@ class Database:
     def get_cached_message(self, message_id: int) -> Optional[Dict[str, Any]]:
         with self._cursor() as cursor:
             row = cursor.execute("""
-                SELECT message_id, guild_id, channel_id, author_tag,
-                       content, attachments, timestamp
+                SELECT message_id, guild_id, channel_id, author_id, author_tag,
+                       content, attachments, timestamp, deleted_at
                 FROM message_cache
                 WHERE message_id = ?
             """, (message_id,)).fetchone()
@@ -488,8 +566,8 @@ class Database:
             params.append(guild_id)
 
         query = (
-            "SELECT message_id, guild_id, channel_id, author_tag, "
-            "content, attachments, timestamp FROM message_cache "
+            "SELECT message_id, guild_id, channel_id, author_id, author_tag, "
+            "content, attachments, timestamp, deleted_at FROM message_cache "
             f"WHERE message_id IN ({placeholders}){guild_clause} "
             "ORDER BY timestamp"
         )
@@ -498,12 +576,12 @@ class Database:
             rows = cursor.execute(query, params).fetchall()
             return [self._decode_message(row) for row in rows]
 
-    def delete_cached_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+    def mark_message_deleted(self, message_id: int) -> Optional[Dict[str, Any]]:
         data = self.get_cached_message(message_id)
         if data:
             with self._cursor() as cursor:
                 cursor.execute(
-                    "DELETE FROM message_cache WHERE message_id = ?",
+                    "UPDATE message_cache SET deleted_at = CURRENT_TIMESTAMP WHERE message_id = ?",
                     (message_id,),
                 )
         return data
