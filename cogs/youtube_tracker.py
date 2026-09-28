@@ -179,22 +179,7 @@ class YouTubeTracker(commands.Cog):
         discord_target_channel_id: int,
         videos: list[dict[str, Any]],
     ) -> int:
-        """Seed a subscription's current feed without sending notifications."""
-        inserted = 0
-        for video in videos:
-            if db.add_video(
-                video_id=video["video_id"],
-                channel_id=video["channel_id"],
-                title=video["title"],
-                video_url=video["video_url"],
-                thumbnail_url=video["thumbnail_url"],
-                published_at=video["published_at"],
-                is_short=video["is_short"],
-                is_live=video["is_live"],
-                notified=True,
-            ):
-                inserted += 1
-
+        """Seed a subscription's current feed and advance its cursor."""
         if videos:
             db.update_yt_last_video(
                 guild_id,
@@ -202,7 +187,11 @@ class YouTubeTracker(commands.Cog):
                 discord_target_channel_id,
                 videos[0]["video_id"],
             )
-        return inserted
+
+        # The subscription cursor is sufficient to prevent current RSS entries
+        # from being announced, so we do not need to write every historical
+        # entry into the legacy videos table.
+        return len(videos)
 
     @staticmethod
     def _new_videos_for_subscription(
