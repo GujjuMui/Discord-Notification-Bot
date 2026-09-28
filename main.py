@@ -116,12 +116,11 @@ async def help_command(ctx: commands.Context) -> None:
     embed.add_field(
         name="YouTube",
         value=(
-            "/addchannel <url>\n"
-            "/removechannel <channel_id>\n"
-            "/listchannels\n"
-            "/settarget <channel_id> <channel>\n"
-            "/pausechannel <channel_id>\n"
-            "/resumechannel <channel_id>\n"
+            "/setup_logs <#channel>\n"
+            "/setup_yt <#channel>\n"
+            "/add_yt <url>\n"
+            "/remove_yt <url_or_id>\n"
+            "/list_yt\n"
             "/ytinfo <url>"
         ),
         inline=False,
