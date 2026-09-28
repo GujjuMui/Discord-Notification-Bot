@@ -282,12 +282,12 @@ class ServerLogger(commands.Cog):
             return discord.Color(0xFF3B30)
         if any(term in value for term in ("joined", "created", "unbanned", "unban")):
             return discord.Color(0x34C759)
+        if any(term in value for term in ("boost", "avatar", "pfp", "server icon", "banner")):
+            return discord.Color(0xAF52DE)
         if any(term in value for term in ("edited", "edit", "moved", "nickname", "renamed")):
             return discord.Color(0x007AFF)
         if any(term in value for term in ("role", "permission", "timeout", "override", "updated")):
             return discord.Color(0xFF9500)
-        if any(term in value for term in ("boost", "avatar", "pfp", "server icon", "banner")):
-            return discord.Color(0xAF52DE)
         return fallback or discord.Color(0x007AFF)
 
     @staticmethod
