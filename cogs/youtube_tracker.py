@@ -146,8 +146,8 @@ class YouTubeTracker(commands.Cog):
             })
         return videos
 
-    async def _prime_channel(self, channel_id: str) -> int:
-        """Record existing feed entries as already known, without notifying."""
+    async def _prime_channel(self, guild_id: int, channel_id: str) -> int:
+        """Seed the current feed and advance this guild's cursor without notifying."""
         videos = await self.fetch_feed(channel_id)
         inserted = 0
         for video in videos:
@@ -163,65 +163,75 @@ class YouTubeTracker(commands.Cog):
                 notified=True,
             ):
                 inserted += 1
+        if videos:
+            db.update_yt_last_video(guild_id, channel_id, videos[0]["video_id"])
         return inserted
 
-    async def _process_channel(self, channel: dict[str, Any]) -> None:
-        videos = await self.fetch_feed(channel["channel_id"])
+    async def _process_channel(self, monitored: dict[str, Any]) -> None:
+        guild_id = int(monitored["guild_id"])
+        channel_id = monitored["yt_channel_id"]
+        videos = await self.fetch_feed(channel_id)
         if not videos:
-            logger.warning("RSS returned no entries for %s", channel["channel_id"])
+            logger.warning("RSS returned no entries for %s", channel_id)
             return
 
-        if not db.has_videos(channel["channel_id"]):
-            for video in videos:
-                db.add_video(
-                    video_id=video["video_id"],
-                    channel_id=video["channel_id"],
-                    title=video["title"],
-                    video_url=video["video_url"],
-                    thumbnail_url=video["thumbnail_url"],
-                    published_at=video["published_at"],
-                    is_short=video["is_short"],
-                    is_live=video["is_live"],
-                    notified=True,
-                )
-            logger.info(
-                "Initialized %s with %d existing videos",
-                channel["channel_name"],
-                len(videos),
+        # The RSS feed is newest-first. Work oldest-to-newest.
+        videos.reverse()
+        last_video_id = monitored.get("last_video_id")
+
+        if not last_video_id:
+            db.update_yt_last_video(
+                guild_id, channel_id, videos[-1]["video_id"]
             )
             return
 
-        videos.reverse()
+        try:
+            cursor_index = next(
+                i for i, video in enumerate(videos)
+                if video["video_id"] == last_video_id
+            )
+        except StopIteration:
+            # If the cursor has fallen outside the RSS window, avoid replaying
+            # the entire feed. Move to the newest item without sending a burst.
+            db.update_yt_last_video(
+                guild_id, channel_id, videos[-1]["video_id"]
+            )
+            return
 
-        for video in videos:
-            existing = db.get_video(video["video_id"])
-            if existing and existing.get("notified_at"):
-                continue
+        new_videos = videos[cursor_index + 1:]
+        if not new_videos:
+            return
 
-            if not existing:
-                db.add_video(
-                    video_id=video["video_id"],
-                    channel_id=video["channel_id"],
-                    title=video["title"],
-                    video_url=video["video_url"],
-                    thumbnail_url=video["thumbnail_url"],
-                    published_at=video["published_at"],
-                    is_short=video["is_short"],
-                    is_live=video["is_live"],
-                    notified=False,
-                )
+        settings = db.get_guild_settings(guild_id)
+        target_id = (
+            settings.get("yt_notification_channel_id")
+            if settings else None
+        )
+        if not target_id:
+            logger.warning(
+                "No YouTube notification channel configured for guild %s",
+                guild_id,
+            )
+            return
 
-            settings = db.get_guild_settings(int(channel["guild_id"]))
-            target_id = settings.get("yt_notification_channel_id") if settings else None
-            if not target_id:
-                logger.warning(
-                    "No Discord target configured for YouTube channel %s",
-                    channel["channel_id"],
-                )
-                continue
+        for video in new_videos:
+            if not await self._send_notification(int(target_id), video):
+                break
 
-            if await self._send_notification(int(target_id), video):
-                db.mark_video_notified(video["video_id"])
+            db.add_video(
+                video_id=video["video_id"],
+                channel_id=video["channel_id"],
+                title=video["title"],
+                video_url=video["video_url"],
+                thumbnail_url=video["thumbnail_url"],
+                published_at=video["published_at"],
+                is_short=video["is_short"],
+                is_live=video["is_live"],
+                notified=True,
+            )
+            db.update_yt_last_video(
+                guild_id, channel_id, video["video_id"]
+            )
 
     async def _send_notification(
         self, discord_channel_id: int, video: dict[str, Any]
