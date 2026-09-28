@@ -385,7 +385,7 @@ class ServerLogger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if not message.guild or message.author.bot:
+        if not message.guild:
             return
         db.cache_message(**self._message_record(message))
 
