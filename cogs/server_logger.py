@@ -36,6 +36,57 @@ class ServerLogger(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._history_cache_loaded = False
+
+    async def _warm_message_cache(self) -> None:
+        """Cache recent channel history so later delete/purge events have context.
+
+        Discord's raw delete events only provide message IDs after deletion.
+        The bot therefore needs to have seen the messages beforehand. On startup
+        we backfill a bounded recent history for channels the bot can read.
+        """
+        if self._history_cache_loaded:
+            return
+
+        self._history_cache_loaded = True
+        total_cached = 0
+
+        for guild in self.bot.guilds:
+            me = guild.me
+            if me is None:
+                continue
+
+            for channel in guild.text_channels:
+                permissions = channel.permissions_for(me)
+                if not (permissions.view_channel and permissions.read_message_history):
+                    continue
+
+                try:
+                    async for message in channel.history(limit=100):
+                        if not message.guild:
+                            continue
+                        record = self._message_record(message)
+                        db.cache_message(
+                            message_id=record["message_id"],
+                            guild_id=record["guild_id"],
+                            channel_id=record["channel_id"],
+                            author_tag=record["author_tag"],
+                            content=record["content"],
+                            attachments=record["attachments"],
+                            timestamp=record["timestamp"],
+                        )
+                        total_cached += 1
+                except (discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Could not warm message cache for #%s in guild %s",
+                        channel.name,
+                        guild.id,
+                    )
+
+        logger.info(
+            "Message cache warm-up complete: cached %s recent messages.",
+            total_cached,
+        )
 
     async def _channel(
         self, guild_id: int
@@ -152,6 +203,10 @@ class ServerLogger(commands.Cog):
             "attachments": [attachment.url for attachment in message.attachments],
             "timestamp": message.created_at.astimezone(timezone.utc).isoformat(),
         }
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        await self._warm_message_cache()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -499,7 +554,10 @@ class ServerLogger(commands.Cog):
                     },
                 )
 
-        if before.communication_disabled_until != after.communication_disabled_until:
+        before_timeout = getattr(before, "communication_disabled_until", None)
+        after_timeout = getattr(after, "communication_disabled_until", None)
+
+        if before_timeout != after_timeout:
             executor = await self._executor(
                 after.guild,
                 (discord.AuditLogAction.member_update,),
@@ -515,7 +573,7 @@ class ServerLogger(commands.Cog):
                     (
                         "Before",
                         str(
-                            before.communication_disabled_until
+                            before_timeout
                             or "Not timed out"
                         ),
                         True,
@@ -523,7 +581,7 @@ class ServerLogger(commands.Cog):
                     (
                         "After",
                         str(
-                            after.communication_disabled_until
+                            after_timeout
                             or "Not timed out"
                         ),
                         True,
@@ -536,8 +594,8 @@ class ServerLogger(commands.Cog):
                 {
                     "guild_id": after.guild.id,
                     "user_id": after.id,
-                    "before": str(before.communication_disabled_until),
-                    "after": str(after.communication_disabled_until),
+                    "before": str(before_timeout),
+                    "after": str(after_timeout),
                     "executor": who,
                 },
             )
