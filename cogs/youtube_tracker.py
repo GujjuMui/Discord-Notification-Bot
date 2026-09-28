@@ -448,6 +448,8 @@ class YouTubeTracker(commands.Cog):
 
         try:
             await channel.send(embed=embed)
+            if guild_id is not None:
+                self._missing_target_alerted.discard((guild_id, discord_channel_id))
             logger.info("Sent notification for video %s", video["video_id"])
             return True
         except (discord.Forbidden, discord.HTTPException) as exc:
