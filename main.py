@@ -6,6 +6,7 @@ import asyncio
 import logging
 import logging.handlers
 import sys
+from datetime import datetime, timezone
 from typing import Optional
 
 import discord
@@ -23,8 +24,8 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 _file_handler = logging.handlers.RotatingFileHandler(
     LOG_DIR / "bot.log",
-    maxBytes=5 * 1024 * 1024,
-    backupCount=3,
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
     encoding="utf-8",
 )
 _file_handler.setFormatter(
@@ -39,6 +40,10 @@ _console_handler.setFormatter(
 root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
+
+BOT_VERSION = "2.0.0"
+DEVELOPER_CREDIT = "GujjuMui"
+START_TIME = datetime.now(timezone.utc)
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -91,38 +96,123 @@ async def setup_bot() -> None:
     logger.info("Bot setup complete.")
 
 
+async def _send_command_error(
+    interaction: discord.Interaction,
+    title: str,
+    description: str,
+) -> None:
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.red(),
+    )
+    embed.set_footer(text=f"Discord Notification Bot v{BOT_VERSION}")
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except discord.HTTPException:
+        logger.exception("Could not send application command error response.")
+
+
 @bot.tree.error
 async def on_app_command_error(
     interaction: discord.Interaction,
     error: app_commands.AppCommandError,
 ) -> None:
-    if isinstance(error, app_commands.CheckFailure):
-        message = (
-            "❌ You do not have permission to run this command. "
-            "Ask an authorized server owner/trusted user."
+    original = getattr(error, "original", error)
+
+    if isinstance(error, (app_commands.CheckFailure, app_commands.MissingPermissions)):
+        await _send_command_error(
+            interaction,
+            "🔒 Permission Required",
+            "You need server-owner, bot-owner, or trusted-user access to run this command.",
         )
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
         return
 
-    logger.error("Unhandled application command error: %s", error)
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await _send_command_error(
+            interaction,
+            "⏳ Slow Down",
+            f"Please wait **{error.retry_after:.1f}s** before trying again.",
+        )
+        return
+
+    if isinstance(original, discord.Forbidden):
+        await _send_command_error(
+            interaction,
+            "🚫 Discord Permission Error",
+            "The bot does not have the Discord permissions required for this action.",
+        )
+        return
+
+    if isinstance(original, discord.HTTPException) and original.status == 429:
+        await _send_command_error(
+            interaction,
+            "⏱️ Discord Rate Limited",
+            "Discord temporarily rate-limited this request. Please try again shortly.",
+        )
+        return
+
+    logger.exception(
+        "Unhandled application command error for /%s: %s",
+        getattr(interaction.command, "qualified_name", "unknown"),
+        error,
+    )
+    await _send_command_error(
+        interaction,
+        "⚠️ Command Error",
+        "Something went wrong while processing that command. The error was logged for diagnosis.",
+    )
 
 
 @bot.event
 async def on_ready() -> None:
     await resolve_bot_owner_id()
+
+    try:
+        from database import db
+        table_counts = db.table_counts()
+        db_status = "SQLite Connected"
+    except Exception:
+        table_counts = {}
+        db_status = "SQLite Error"
+        logger.exception("Database health check failed during startup.")
+
+    user_count = sum(
+        (guild.member_count or len(guild.members))
+        for guild in bot.guilds
+    )
+    discord_py_version = getattr(discord, "__version__", "unknown")
+    start_text = START_TIME.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    banner = [
+        "┌─────────────────────────────────────────────────────────────┐",
+        f"│ 🚀 BOT NAME: {bot.user or 'Discord Notification Bot'} v{BOT_VERSION} (Production)",
+        f"│ 👤 DEVELOPER / POWERED BY: {DEVELOPER_CREDIT} / Discord Notification Bot",
+        f"│ 🤖 DISCORD.PY VERSION: {discord_py_version}",
+        f"│ 📊 SERVERS CONNECTED: {len(bot.guilds)} | USERS: {user_count}",
+        f"│ 💾 DATABASE: {db_status} | STATUS: Online & Ready",
+        f"│ 🕒 START TIME: {start_text}",
+        "└─────────────────────────────────────────────────────────────┘",
+    ]
+    print("\n" + "\n".join(banner))
+
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
+    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger")
+    logger.info("Database tables synchronized: %s", table_counts)
     if server_logger:
-        logger.info(
-            "Categorized server logging is loaded. Use /setup_logs to configure routing."
-        )
+        logger.info("Categorized server logging is loaded.")
 
     try:
         synced = await bot.tree.sync()
-        logger.info("Synced %d slash command(s).", len(synced))
+        logger.info(
+            "Synced %d slash command(s): %s",
+            len(synced),
+            ", ".join(f"/{command.name}" for command in synced),
+        )
     except discord.HTTPException:
         logger.exception("Failed to sync slash commands.")
 
@@ -152,25 +242,15 @@ async def ping(ctx: commands.Context) -> None:
 @bot.command(name="help")
 async def help_command(ctx: commands.Context) -> None:
     embed = discord.Embed(
-        title="Discord Notification Bot",
-        description="YouTube notifications plus server audit logging.",
+        title="📖 Discord Notification Bot",
+        description="Use **/help** for the interactive command guide.",
         color=discord.Color.red(),
     )
     embed.add_field(
-        name="YouTube",
-        value=(
-            "/setup_logs [auto_create] [type] [#channel]\n"
-            "/add_yt <url> <#target_channel>\n"
-            "/remove_yt <url_or_id> [#target_channel]\n"
-            "/list_yt\n"
-            "/trust add <@user>\n"
-            "/trust remove <@user>\n"
-            "/trust list\n"
-            "/ytinfo <url>"
-        ),
+        name="Quick Commands",
+        value="/about\n/botstatus\n/ytinfo <url>\n!ping",
         inline=False,
     )
-    embed.add_field(name="Basic", value="!ping", inline=False)
     await ctx.send(embed=embed)
 
 
