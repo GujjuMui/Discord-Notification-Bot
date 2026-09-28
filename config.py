@@ -1,4 +1,9 @@
-"""Configuration for the YouTube Notification Bot."""
+"""Environment configuration for the Discord bot.
+
+Only secrets and deployment-specific storage paths belong here. Guild/channel
+configuration and YouTube sources are stored in SQLite and managed via slash
+commands.
+"""
 
 from __future__ import annotations
 
@@ -14,22 +19,9 @@ load_dotenv(ENV_FILE)
 
 DISCORD_BOT_TOKEN: Optional[str] = os.getenv("DISCORD_BOT_TOKEN")
 
-def _optional_channel_id(name: str, fallback: Optional[str] = None) -> Optional[int]:
-    value = os.getenv(name) or (os.getenv(fallback) if fallback else None)
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a numeric Discord channel ID.") from exc
-
-NOTIFICATION_CHANNEL_ID = _optional_channel_id("NOTIFICATION_CHANNEL_ID", "DISCORD_CHANNEL_ID")
-DISCORD_CHANNEL_ID = NOTIFICATION_CHANNEL_ID
-AUDIT_LOG_CHANNEL_ID = _optional_channel_id("AUDIT_LOG_CHANNEL_ID")
-BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
-YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 _db_value = Path(os.getenv("DATABASE_PATH", "youtube_bot.db"))
 DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_value
+
 HTTP_USER_AGENT = os.getenv(
     "HTTP_USER_AGENT",
     "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)",
@@ -44,6 +36,8 @@ try:
     HTTP_TIMEOUT = max(5, int(os.getenv("HTTP_TIMEOUT", "20")))
 except ValueError as exc:
     raise ValueError("HTTP_TIMEOUT must be a whole number of seconds.") from exc
+
+BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 
 
 def get_required_token() -> str:
