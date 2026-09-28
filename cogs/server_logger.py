@@ -277,7 +277,7 @@ class ServerLogger(commands.Cog):
 
     @staticmethod
     def _visual_color(title: str, log_type: str, fallback: Optional[discord.Color]) -> discord.Color:
-        value = title.lower()
+        value = f"{title} {log_type}".lower()
         if any(term in value for term in ("deleted", "delet", "left", "removed", "banned", "purge")):
             return discord.Color(0xFF3B30)
         if any(term in value for term in ("joined", "created", "unbanned", "unban")):
@@ -291,26 +291,35 @@ class ServerLogger(commands.Cog):
         return fallback or discord.Color(0x007AFF)
 
     @staticmethod
-    def _target_from_fields(description: str, fields: list[tuple[str, str, bool]]) -> tuple[str, Optional[int]]:
-        preferred = ("User", "Author", "Target", "Role", "Channel", "Name")
-        source = ""
-        for wanted in preferred:
-            for name, value, _ in fields:
-                if str(name).lower() == wanted.lower() and value:
-                    source = str(value)
-                    break
-            if source:
-                break
-        if not source:
-            source = description or "Server event"
-        ids = re.findall(r"(?<!\d)(\d{15,21})(?!\d)", source)
-        target_id = int(ids[-1]) if ids else None
-        clean = source.replace(chr(96) * 3, "").strip()
-        if target_id:
-            clean = re.sub(r"\s*\(\s*ID:\s*\d{15,21}\s*\)", "", clean, flags=re.I)
-            clean = re.sub(r"\s*\(\s*\d{15,21}\s*\)", "", clean)
-            clean = clean + " (ID: " + chr(96) + str(target_id) + chr(96) + ")"
-        return clean[:1024], target_id
+    def _extract_id(value: Any) -> Optional[int]:
+        match = re.search(r"(?<!\d)(\d{15,21})(?!\d)", str(value or ""))
+        return int(match.group(1)) if match else None
+
+    @classmethod
+    def _compact_identity(cls, label: str, value: Any) -> str:
+        raw = str(value or "Unknown / unavailable").strip()
+        if raw == "Unknown / unavailable":
+            return f"{label}: Unknown"
+        if raw.startswith("<@") or raw.startswith("<#"):
+            return f"{label}: {raw}"
+        target_id = cls._extract_id(raw)
+        if target_id is None:
+            return f"{label}: {raw}"
+        if label in {"Author", "Executor", "By"}:
+            return f"{label}: <@{target_id}> (" + chr(96) + str(target_id) + chr(96) + ")"
+        return f"{label}: {raw} (" + chr(96) + str(target_id) + chr(96) + ")"
+
+    @staticmethod
+    def _compact_value(value: Any, limit: int = 900) -> str:
+        text = str(value or "-").replace("\r", " ").replace("\n", " ↵ ")
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    @staticmethod
+    def _compact_change(before: Any, after: Any) -> str:
+        old = str(before or "None").replace("\n", " ")
+        new = str(after or "None").replace("\n", " ")
+        tick = chr(96)
+        return f"• Old: " + tick + old + tick + " ➔ New: " + tick + new + tick
 
     async def _send(
         self,
@@ -329,22 +338,66 @@ class ServerLogger(commands.Cog):
             return False
 
         guild = self.bot.get_guild(guild_id)
-        event_fields = list(fields or [])
-        target_value, target_id = self._target_from_fields(description, event_fields)
-        executor_value = next(
-            (str(value) for name, value, _ in event_fields
-             if any(key in str(name).lower() for key in ("executor", "purged by", "deleted by"))),
-            "Unknown / unavailable",
-        )
-        event_fields = [
-            item for item in event_fields
-            if not any(key in str(item[0]).lower() for key in ("executor", "purged by", "deleted by"))
-        ]
+        source_fields = list(fields or [])
+
+        metadata: list[str] = []
+        retained: list[tuple[str, str, bool]] = []
+        consumed: set[int] = set()
+
+        author_value = None
+        target_value = None
+        channel_value = None
+        executor_value = None
+
+        for index, (name, value, _inline) in enumerate(source_fields):
+            key = str(name).strip().lower()
+            if key in {"author", "user"} and author_value is None:
+                author_value = value
+                consumed.add(index)
+            elif key == "target" and target_value is None:
+                target_value = value
+                consumed.add(index)
+            elif key == "channel" and channel_value is None:
+                channel_value = value
+                consumed.add(index)
+            elif key in {"executor", "deleted by", "purged by"} and executor_value is None:
+                executor_value = value
+                consumed.add(index)
+
+        if author_value is not None:
+            metadata.append(self._compact_identity("Author", author_value))
+        if target_value is not None:
+            metadata.append(self._compact_identity("Target", target_value))
+        if channel_value is not None:
+            metadata.append(self._compact_identity("Channel", channel_value))
+        if executor_value is not None:
+            metadata.append(self._compact_identity("By", executor_value))
+
+        paired_before: Optional[tuple[int, str]] = None
+        paired_after: Optional[tuple[int, str]] = None
+        for index, (name, value, _inline) in enumerate(source_fields):
+            key = str(name).strip().lower()
+            if index in consumed:
+                continue
+            if key in {"before", "old"} and paired_before is None:
+                paired_before = (index, str(value))
+            elif key in {"after", "new"} and paired_after is None:
+                paired_after = (index, str(value))
+
+        if paired_before and paired_after:
+            retained.append(("Change", self._compact_change(paired_before[1], paired_after[1]), False))
+            consumed.update({paired_before[0], paired_after[0]})
+
+        for index, (name, value, inline) in enumerate(source_fields):
+            if index in consumed:
+                continue
+            compact = self._compact_value(value)
+            retained.append((str(name)[:256], compact, bool(inline or len(compact) <= 320)))
 
         embed = discord.Embed(
             title=title,
             description="",
-            color=self._visual_color(title + " " + description, log_type, color),
+            color=self._visual_color(title, log_type, color),
             timestamp=datetime.now(timezone.utc),
         )
 
@@ -355,40 +408,48 @@ class ServerLogger(commands.Cog):
             else:
                 embed.set_author(name=guild.name)
 
-        embed.add_field(name="Target", value=target_value or "Unknown / unavailable", inline=False)
-        content = (description or "No additional content.").replace(chr(96) * 3, "'''")
-        embed.add_field(name="Content", value="~~~txt\n" + content[:1000] + "\n~~~", inline=False)
+        if metadata:
+            embed.description = "  |  ".join(metadata)[:4096]
 
-        for name, value, inline in event_fields:
-            embed.add_field(name=str(name)[:256], value=(str(value) if value else "-")[:1024], inline=inline)
-        embed.add_field(name="Executor", value=executor_value[:1024], inline=True)
+        if description:
+            content = description.replace(chr(96) * 3, "").strip()
+            if len(content) > 1000:
+                content = content[:997] + "…"
+            quoted = "\n".join(f"> {line}" if line else ">" for line in content.splitlines())
+            embed.add_field(name="Content", value=quoted[:1024], inline=False)
 
-        user_avatar = None
-        if guild and target_id:
+        for name, value, inline in retained:
+            embed.add_field(
+                name=str(name)[:256],
+                value=str(value)[:1024] if value else "-",
+                inline=inline,
+            )
+
+        target_id = self._extract_id(target_value or author_value or description)
+        action_ts = int(datetime.now(timezone.utc).timestamp())
+        footer_parts = []
+        if target_id:
+            footer_parts.append(f"ID: {target_id}")
+        footer_parts.extend((log_type.upper(), f"<t:{action_ts}:t>"))
+        embed.set_footer(text=" • ".join(footer_parts))
+
+        if target_id and guild:
             member = guild.get_member(target_id)
             if member:
-                user_avatar = self._avatar_url(member.display_avatar)
+                embed.set_thumbnail(url=self._avatar_url(member.display_avatar))
             else:
                 try:
                     user = await self.bot.fetch_user(target_id)
-                    user_avatar = self._avatar_url(user.display_avatar)
+                    avatar = self._avatar_url(user.display_avatar)
+                    if avatar:
+                        embed.set_thumbnail(url=avatar)
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
-        if user_avatar:
-            embed.set_thumbnail(url=user_avatar)
-        elif guild:
-            guild_icon = self._avatar_url(guild.icon)
-            if guild_icon:
-                embed.set_thumbnail(url=guild_icon)
-        elif thumbnail:
+        if thumbnail and not getattr(embed.thumbnail, "url", None):
             embed.set_thumbnail(url=thumbnail)
         if image:
             embed.set_image(url=image)
-
-        embed.set_footer(
-            text=f"{guild.name if guild else 'Server'} • {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S UTC}"
-        )
 
         try:
             if file is None:
