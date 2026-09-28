@@ -78,6 +78,16 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trusted_users (
+                    guild_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    added_by TEXT NOT NULL,
+                    added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS guild_settings (
                     guild_id INTEGER PRIMARY KEY,
                     audit_log_channel_id INTEGER,
@@ -133,6 +143,44 @@ class Database:
             }
             if "notified_at" not in columns:
                 cursor.execute("ALTER TABLE videos ADD COLUMN notified_at TEXT")
+
+    # Trusted users / RBAC -----------------------------------------------
+
+    def add_trusted_user(self, guild_id: int, user_id: int, added_by: int) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute("""
+                INSERT OR REPLACE INTO trusted_users
+                    (guild_id, user_id, added_by, added_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """, (str(guild_id), str(user_id), str(added_by)))
+            return cursor.rowcount > 0
+
+    def remove_trusted_user(self, guild_id: int, user_id: int) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM trusted_users
+                WHERE guild_id = ? AND user_id = ?
+            """, (str(guild_id), str(user_id)))
+            return cursor.rowcount > 0
+
+    def is_trusted_user(self, guild_id: int, user_id: int) -> bool:
+        with self._cursor() as cursor:
+            row = cursor.execute("""
+                SELECT 1 FROM trusted_users
+                WHERE guild_id = ? AND user_id = ?
+                LIMIT 1
+            """, (str(guild_id), str(user_id))).fetchone()
+            return row is not None
+
+    def get_trusted_users(self, guild_id: int) -> List[Dict[str, Any]]:
+        with self._cursor() as cursor:
+            rows = cursor.execute("""
+                SELECT guild_id, user_id, added_by, added_at
+                FROM trusted_users
+                WHERE guild_id = ?
+                ORDER BY added_at ASC
+            """, (str(guild_id),)).fetchall()
+            return [dict(row) for row in rows]
 
     # Guild configuration -------------------------------------------------
 
