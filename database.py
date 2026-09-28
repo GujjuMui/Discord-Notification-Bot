@@ -420,6 +420,20 @@ class Database:
         notified: bool = False,
     ) -> bool:
         with self._cursor() as cursor:
+            # videos.channel_id has a foreign key to channels.channel_id.
+            # YouTube monitoring uses the newer guild-scoped table, so make
+            # sure the legacy parent row exists before storing video history.
+            cursor.execute("""
+                INSERT INTO channels
+                    (channel_id, channel_name, channel_url, is_active)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(channel_id) DO NOTHING
+            """, (
+                channel_id,
+                channel_id,
+                f"https://www.youtube.com/channel/{channel_id}",
+            ))
+
             cursor.execute("""
                 INSERT OR IGNORE INTO videos
                     (video_id, channel_id, title, video_url, thumbnail_url,
