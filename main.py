@@ -9,6 +9,7 @@ import sys
 from typing import Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 import config
@@ -85,6 +86,25 @@ async def setup_bot() -> None:
 
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")
+
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+) -> None:
+    if isinstance(error, app_commands.CheckFailure):
+        message = (
+            "❌ You do not have permission to run this command. "
+            "Ask an authorized server owner/trusted user."
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+        return
+
+    logger.exception("Unhandled application command error", exc_info=error)
 
 
 @bot.event
