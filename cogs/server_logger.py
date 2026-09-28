@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
@@ -274,6 +275,43 @@ class ServerLogger(commands.Cog):
                 logger.warning("Could not send missing audit log alert in guild %s.", guild_id)
 
 
+    @staticmethod
+    def _visual_color(title: str, log_type: str, fallback: Optional[discord.Color]) -> discord.Color:
+        value = title.lower()
+        if any(term in value for term in ("deleted", "delet", "left", "removed", "banned", "purge")):
+            return discord.Color(0xFF3B30)
+        if any(term in value for term in ("joined", "created", "unbanned", "unban")):
+            return discord.Color(0x34C759)
+        if any(term in value for term in ("edited", "edit", "moved", "nickname", "renamed")):
+            return discord.Color(0x007AFF)
+        if any(term in value for term in ("role", "permission", "timeout", "override", "updated")):
+            return discord.Color(0xFF9500)
+        if any(term in value for term in ("boost", "avatar", "pfp", "server icon", "banner")):
+            return discord.Color(0xAF52DE)
+        return fallback or discord.Color(0x007AFF)
+
+    @staticmethod
+    def _target_from_fields(description: str, fields: list[tuple[str, str, bool]]) -> tuple[str, Optional[int]]:
+        preferred = ("User", "Author", "Target", "Role", "Channel", "Name")
+        source = ""
+        for wanted in preferred:
+            for name, value, _ in fields:
+                if str(name).lower() == wanted.lower() and value:
+                    source = str(value)
+                    break
+            if source:
+                break
+        if not source:
+            source = description or "Server event"
+        ids = re.findall(r"(?<!\d)(\d{15,21})(?!\d)", source)
+        target_id = int(ids[-1]) if ids else None
+        clean = source.replace(chr(96) * 3, "").strip()
+        if target_id:
+            clean = re.sub(r"\s*\(\s*ID:\s*\d{15,21}\s*\)", "", clean, flags=re.I)
+            clean = re.sub(r"\s*\(\s*\d{15,21}\s*\)", "", clean)
+            clean = clean + " (ID: " + chr(96) + str(target_id) + chr(96) + ")"
+        return clean[:1024], target_id
+
     async def _send(
         self,
         guild_id: int,
@@ -290,23 +328,67 @@ class ServerLogger(commands.Cog):
         if channel is None:
             return False
 
+        guild = self.bot.get_guild(guild_id)
+        event_fields = list(fields or [])
+        target_value, target_id = self._target_from_fields(description, event_fields)
+        executor_value = next(
+            (str(value) for name, value, _ in event_fields
+             if any(key in str(name).lower() for key in ("executor", "purged by", "deleted by"))),
+            "Unknown / unavailable",
+        )
+        event_fields = [
+            item for item in event_fields
+            if not any(key in str(item[0]).lower() for key in ("executor", "purged by", "deleted by"))
+        ]
+
         embed = discord.Embed(
             title=title,
-            description=description[:4096] if description else "",
-            color=color or discord.Color.blurple(),
+            description="",
+            color=self._visual_color(title, log_type, color),
             timestamp=datetime.now(timezone.utc),
         )
-        for name, value, inline in fields or []:
-            embed.add_field(
-                name=str(name)[:256],
-                value=(str(value) if value else "-")[:1024],
-                inline=inline,
-            )
-        if thumbnail:
+
+        if guild:
+            guild_icon = self._avatar_url(guild.icon)
+            if guild_icon:
+                embed.set_author(name=guild.name, icon_url=guild_icon)
+            else:
+                embed.set_author(name=guild.name)
+
+        embed.add_field(name="Target", value=target_value or "Unknown / unavailable", inline=False)
+        content = (description or "No additional content.").replace(chr(96) * 3, "'''")
+        embed.add_field(name="Content", value="~~~txt\n" + content[:1000] + "\n~~~", inline=False)
+
+        for name, value, inline in event_fields:
+            embed.add_field(name=str(name)[:256], value=(str(value) if value else "-")[:1024], inline=inline)
+        embed.add_field(name="Executor", value=executor_value[:1024], inline=True)
+
+        user_avatar = None
+        if guild and target_id:
+            member = guild.get_member(target_id)
+            if member:
+                user_avatar = self._avatar_url(member.display_avatar)
+            else:
+                try:
+                    user = await self.bot.fetch_user(target_id)
+                    user_avatar = self._avatar_url(user.display_avatar)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+
+        if user_avatar:
+            embed.set_thumbnail(url=user_avatar)
+        elif guild:
+            guild_icon = self._avatar_url(guild.icon)
+            if guild_icon:
+                embed.set_thumbnail(url=guild_icon)
+        elif thumbnail:
             embed.set_thumbnail(url=thumbnail)
         if image:
             embed.set_image(url=image)
-        embed.set_footer(text="Server Audit Logger")
+
+        embed.set_footer(
+            text=f"{guild.name if guild else 'Server'} • {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S UTC}"
+        )
 
         try:
             if file is None:
@@ -317,6 +399,7 @@ class ServerLogger(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Could not send %s audit event for guild %s", log_type, guild_id)
             return False
+
 
     async def _executor(
         self,
