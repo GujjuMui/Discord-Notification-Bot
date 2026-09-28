@@ -57,6 +57,7 @@ tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
 bot_owner_id: Optional[int] = config.BOT_OWNER_ID
 
+
 async def resolve_bot_owner_id() -> Optional[int]:
     global bot_owner_id
     if bot_owner_id is not None:
@@ -183,6 +184,13 @@ if __name__ == "__main__":
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, discord.errors.PrivilegedIntentsRequired):
+            logger.error(
+                "Discord rejected the connection because one or more privileged "
+                "intents are disabled in the Developer Portal. Enable the required "
+                "privileged intents for this application and restart the bot."
+            )
+            sys.exit(1)
         logger.exception("Fatal error.")
         sys.exit(1)
