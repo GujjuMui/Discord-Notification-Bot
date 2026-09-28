@@ -351,11 +351,9 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     trust_group = app_commands.Group(name="trust", description="Manage trusted users.")
 
     @trust_group.command(name="add", description="Trust a user for administrative bot commands.")
+    @is_trusted_or_owner()
     @app_commands.describe(user="User to trust in this server")
     async def trust_add(interaction: discord.Interaction, user: discord.Member) -> None:
-        if not await _rbac_allowed(interaction):
-            await interaction.response.send_message(PERMISSION_DENIED, ephemeral=True)
-            return
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
@@ -363,11 +361,9 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(f"✅ {user.mention} is now trusted.", ephemeral=True)
 
     @trust_group.command(name="remove", description="Revoke a user's trusted status.")
+    @is_trusted_or_owner()
     @app_commands.describe(user="User to remove from this server's trusted list")
     async def trust_remove(interaction: discord.Interaction, user: discord.Member) -> None:
-        if not await _rbac_allowed(interaction):
-            await interaction.response.send_message(PERMISSION_DENIED, ephemeral=True)
-            return
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
@@ -375,10 +371,8 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message("✅ Trusted status removed." if changed else "User is not trusted.", ephemeral=True)
 
     @trust_group.command(name="list", description="List trusted users in this server.")
+    @is_trusted_or_owner()
     async def trust_list(interaction: discord.Interaction) -> None:
-        if not await _rbac_allowed(interaction):
-            await interaction.response.send_message(PERMISSION_DENIED, ephemeral=True)
-            return
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
