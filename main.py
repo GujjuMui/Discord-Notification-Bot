@@ -104,7 +104,7 @@ async def on_app_command_error(
             await interaction.response.send_message(message, ephemeral=True)
         return
 
-    logger.exception("Unhandled application command error", exc_info=error)
+    logger.error("Unhandled application command error: %s", error)
 
 
 @bot.event
@@ -157,6 +157,9 @@ async def help_command(ctx: commands.Context) -> None:
             "/add_yt <url>\n"
             "/remove_yt <url_or_id>\n"
             "/list_yt\n"
+            "/trust add <@user>\n"
+            "/trust remove <@user>\n"
+            "/trust list\n"
             "/ytinfo <url>"
         ),
         inline=False,
