@@ -454,7 +454,7 @@ class YouTubeTracker(commands.Cog):
         embed.set_footer(text="YouTube Notification Bot • New upload")
 
         content = (
-            f"Hey <@&{ping_role_id}>! **{channel_name}** just uploaded a new video!"
+            f"Hey <@&{ping_role_id}>! **[{channel_name}]** just uploaded a new video!"
             if ping_role_id
             else f"**{channel_name}** just uploaded a new video!"
         )
