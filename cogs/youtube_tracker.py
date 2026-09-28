@@ -373,6 +373,7 @@ class YouTubeTracker(commands.Cog):
                         int(subscription["discord_target_channel_id"]),
                         video,
                         int(subscription["guild_id"]),
+                        int(subscription["ping_role_id"]) if subscription.get("ping_role_id") else None,
                     )
                     for subscription in targets
                 ],
@@ -415,6 +416,7 @@ class YouTubeTracker(commands.Cog):
         discord_channel_id: int,
         video: dict[str, Any],
         guild_id: Optional[int] = None,
+        ping_role_id: Optional[int] = None,
     ) -> bool:
         channel = self.bot.get_channel(discord_channel_id)
         if channel is None:
@@ -432,22 +434,32 @@ class YouTubeTracker(commands.Cog):
                 await self._notify_missing_target(guild_id, discord_channel_id)
             return False
 
+        channel_name = video.get("channel_name") or "YouTube"
         embed = discord.Embed(
             title=f"🎥 {video['title']}",
             url=video["video_url"],
-            description=f"New video from **{video.get('channel_name') or 'YouTube'}**",
-            color=discord.Color.red(),
+            description=f"**{channel_name}** just uploaded a new video!",
+            color=discord.Color(0xFF0000),
         )
+        embed.add_field(name="Channel", value=f"**{channel_name}**", inline=True)
+        if video.get("published_at"):
+            embed.add_field(name="Published", value=str(video["published_at"]), inline=True)
+        embed.add_field(name="Video", value=f"[Watch on YouTube]({video['video_url']})", inline=False)
 
         published = self._parse_datetime(video.get("published_at"))
         if published:
             embed.timestamp = published
         if video.get("thumbnail_url"):
-            embed.set_thumbnail(url=video["thumbnail_url"])
-        embed.set_footer(text="YouTube Notification Bot")
+            embed.set_image(url=video["thumbnail_url"])
+        embed.set_footer(text="YouTube Notification Bot • New upload")
 
+        content = f"<@&{ping_role_id}> " if ping_role_id else ""
         try:
-            await channel.send(embed=embed)
+            await channel.send(
+                content=content or None,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
             if guild_id is not None:
                 self._missing_target_alerted.discard((guild_id, discord_channel_id))
             logger.info("Sent notification for video %s", video["video_id"])
@@ -500,6 +512,7 @@ class YouTubeTracker(commands.Cog):
         guild_id: int,
         url: str,
         discord_target_channel_id: int,
+        ping_role_id: Optional[int] = None,
     ) -> dict[str, Any]:
         channel_id = await self.resolve_channel_id(url)
         videos = await self.fetch_feed(channel_id)
@@ -522,6 +535,7 @@ class YouTubeTracker(commands.Cog):
             yt_channel_name=channel_name,
             yt_channel_url=f"https://www.youtube.com/channel/{channel_id}",
             discord_target_channel_id=discord_target_channel_id,
+            ping_role_id=ping_role_id,
             last_video_id=existing.get("last_video_id") if existing else None,
         )
 
@@ -539,6 +553,8 @@ class YouTubeTracker(commands.Cog):
             "video_count": len(videos),
             "already_tracked": existing is not None,
             "discord_target_channel_id": discord_target_channel_id,
+            "ping_role_id": ping_role_id,
+            "channel_url": f"https://www.youtube.com/channel/{channel_id}",
         }
 
 
@@ -725,16 +741,18 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 ephemeral=True,
             )
 
-    @bot.tree.command(name="add_yt", description="Register a YouTube channel and its Discord notification destination.")
+    @bot.tree.command(name="add_yt", description="Register a YouTube channel, destination, and optional role ping.")
     @is_trusted_or_owner()
     @app_commands.describe(
         url="YouTube channel URL or @handle URL",
         target_channel="Discord channel where notifications for this YouTube source will be posted",
+        role="Optional role to ping when a new video is detected",
     )
     async def add_yt(
         interaction: discord.Interaction,
         url: str,
         target_channel: discord.TextChannel,
+        role: Optional[discord.Role] = None,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
@@ -749,6 +767,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 interaction.guild.id,
                 url,
                 target_channel.id,
+                role.id if role else None,
             )
             if result["already_tracked"]:
                 message = (
@@ -887,7 +906,11 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             for item in subscriptions:
                 target_id = int(item["discord_target_channel_id"])
                 target = f"<#{target_id}>" if target_id > 0 else "Not configured"
-                destinations.append(f"• [{item['yt_channel_name']}]({item['yt_channel_url']}) ➔ Posting to {target}")
+                ping_role = f"<@&{item['ping_role_id']}>" if item.get("ping_role_id") else "None"
+                destinations.append(
+                    f"• [{item['yt_channel_name']}]({item['yt_channel_url']}) ➔ {target} "
+                    f"(Pings: {ping_role})"
+                )
 
             embed.add_field(
                 name=first["yt_channel_name"][:256],
@@ -896,6 +919,60 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(name="test_yt", description="Send a realistic YouTube notification preview.")
+    @is_trusted_or_owner()
+    @app_commands.describe(
+        target_channel="Discord channel where the test notification will be posted",
+        role="Optional role to ping in the test notification",
+    )
+    async def test_yt(
+        interaction: discord.Interaction,
+        target_channel: discord.TextChannel,
+        role: Optional[discord.Role] = None,
+    ) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="[TEST PREVIEW] 🎥 MrBeast uploaded a new video!",
+            description="A realistic preview of the YouTube upload notification.",
+            color=discord.Color(0xFF0000),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Video Title", value="**I Survived 7 Days In An Abandoned City**", inline=False)
+        embed.add_field(name="Channel", value="**MrBeast**", inline=True)
+        embed.add_field(name="Duration", value="24:18", inline=True)
+        embed.add_field(name="Published", value="Just now", inline=True)
+        embed.set_image(url="https://placehold.co/1280x720/png?text=MrBeast+HD+Thumbnail")
+        embed.set_footer(text="YouTube Notification Bot • TEST PREVIEW")
+
+        view = discord.ui.View(timeout=None)
+        view.add_item(
+            discord.ui.Button(
+                label="Watch on YouTube",
+                style=discord.ButtonStyle.link,
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                disabled=True,
+            )
+        )
+
+        content = f"{role.mention} " if role else ""
+        await target_channel.send(
+            content=content or None,
+            embed=embed,
+            view=view,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+        await interaction.response.send_message(
+            f"✅ Test notification sent to {target_channel.mention}"
+            + (f" with {role.mention} ping." if role else "."),
+            ephemeral=True,
+        )
 
     @bot.tree.command(name="ytinfo", description="Resolve a YouTube URL to its channel ID.")
     @app_commands.describe(url="YouTube channel URL or @handle URL")
