@@ -446,11 +446,11 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     @is_trusted_or_owner()
     @app_commands.describe(
         auto_create="Create the 📁 SERVER LOGS category and all 8 log channels automatically.",
-        log_type="For manual mapping: chat/member/profile/role/channel/server/voice/mod.",
+        type="For manual mapping: chat/member/profile/role/channel/server/voice/mod.",
         channel="Existing text channel to use for the selected log type.",
     )
     @app_commands.choices(
-        log_type=[
+        type=[
             app_commands.Choice(name="chat", value="chat"),
             app_commands.Choice(name="member", value="member"),
             app_commands.Choice(name="profile", value="profile"),
@@ -464,7 +464,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     async def setup_logs(
         interaction: discord.Interaction,
         auto_create: bool = True,
-        log_type: Optional[app_commands.Choice[str]] = None,
+        type: Optional[app_commands.Choice[str]] = None,
         channel: Optional[discord.TextChannel] = None,
     ) -> None:
         if not interaction.guild:
@@ -486,7 +486,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             result = await server_logger.configure_logs(
                 interaction.guild,
                 auto_create=auto_create,
-                log_type=log_type.value if log_type else None,
+                log_type=type.value if type else None,
                 channel=channel,
             )
         except (ValueError, discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
