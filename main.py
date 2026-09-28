@@ -54,6 +54,21 @@ bot = commands.Bot(
 
 tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
+bot_owner_id: Optional[int] = config.BOT_OWNER_ID
+
+async def resolve_bot_owner_id() -> Optional[int]:
+    global bot_owner_id
+    if bot_owner_id is not None:
+        return bot_owner_id
+    try:
+        application = await bot.application_info()
+        owner = application.owner
+        bot_owner_id = owner.id if owner else None
+        if bot_owner_id:
+            logger.info("Resolved Discord Application Owner as bot owner: %s", bot_owner_id)
+    except (discord.HTTPException, discord.Forbidden):
+        logger.exception("Could not resolve Discord Application Owner.")
+    return bot_owner_id
 
 
 async def setup_bot() -> None:
@@ -74,6 +89,7 @@ async def setup_bot() -> None:
 
 @bot.event
 async def on_ready() -> None:
+    await resolve_bot_owner_id()
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
 
