@@ -135,10 +135,6 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_yt_monitored_channel ON yt_monitored_channels(yt_channel_id)"
             )
             cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_yt_monitored_route "
-                "ON yt_monitored_channels(guild_id, yt_channel_id, discord_target_channel_id)"
-            )
-            cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_message_cache_guild_channel ON message_cache(guild_id, channel_id)"
             )
 
@@ -199,6 +195,10 @@ class Database:
                         ON gs.guild_id = legacy.guild_id
                 """)
                 cursor.execute("DROP TABLE yt_monitored_channels_legacy")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_yt_monitored_route "
+                    "ON yt_monitored_channels(guild_id, yt_channel_id, discord_target_channel_id)"
+                )
 
     # Trusted users / RBAC -----------------------------------------------
 
