@@ -33,7 +33,19 @@ _file_handler.setFormatter(
 )
 root_logger.addHandler(_file_handler)
 
+class _ConsoleNoiseFilter(logging.Filter):
+    """Keep optional dependency warnings out of the terminal while retaining them in bot.log."""
+    _ignored = {
+        "PyNaCl is not installed, voice will NOT be supported",
+        "davey is not installed, voice will NOT be supported",
+    }
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() not in self._ignored
+
+
 _console_handler = logging.StreamHandler()
+_console_handler.addFilter(_ConsoleNoiseFilter())
 _console_handler.setFormatter(
     logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 )
