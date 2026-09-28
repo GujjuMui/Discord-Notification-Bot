@@ -20,43 +20,6 @@ from database import db
 
 logger = logging.getLogger(__name__)
 
-PERMISSION_DENIED = "❌ You do not have permission to run this command. Ask an authorized server owner/trusted user."
-
-def is_trusted_or_owner():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild:
-            return False
-        owner_id = config.BOT_OWNER_ID
-        if owner_id is None:
-            try:
-                application = await interaction.client.application_info()
-                owner_id = application.owner.id if application.owner else None
-            except (discord.HTTPException, discord.Forbidden):
-                owner_id = None
-        return (
-            interaction.user.id == owner_id
-            or interaction.user.id == interaction.guild.owner_id
-            or db.is_trusted_user(interaction.guild.id, interaction.user.id)
-        )
-    return app_commands.check(predicate)
-
-async def _rbac_allowed(interaction: discord.Interaction) -> bool:
-    if not interaction.guild:
-        return False
-    owner_id = config.BOT_OWNER_ID
-    if owner_id is None:
-        try:
-            application = await interaction.client.application_info()
-            owner_id = application.owner.id if application.owner else None
-        except (discord.HTTPException, discord.Forbidden):
-            owner_id = None
-    return (
-        interaction.user.id == owner_id
-        or interaction.user.id == interaction.guild.owner_id
-        or db.is_trusted_user(interaction.guild.id, interaction.user.id)
-    )
-
-
 CHANNEL_ID_RE = re.compile(r"UC[a-zA-Z0-9_-]{22}")
 CHANNEL_ID_PATTERNS = (
     re.compile(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"'),
