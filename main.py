@@ -1,9 +1,10 @@
-"""Entry point for the YouTube Notification Bot."""
+"""Entry point for the Discord bot."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 import sys
 from typing import Optional
 
@@ -11,16 +12,39 @@ import discord
 from discord.ext import commands
 
 import config
+from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+LOG_DIR = config.PROJECT_ROOT / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_DIR / "bot.log",
+    maxBytes=5 * 1024 * 1024,
+    backupCount=3,
+    encoding="utf-8",
 )
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
+root_logger.addHandler(_file_handler)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
+root_logger.addHandler(_console_handler)
+
 logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
+intents.guilds = True
+intents.members = True
 intents.message_content = True
+intents.moderation = True
+intents.voice_states = True
 
 bot = commands.Bot(
     command_prefix=config.BOT_PREFIX,
@@ -29,16 +53,21 @@ bot = commands.Bot(
 )
 
 tracker: Optional[YouTubeTracker] = None
+server_logger: Optional[ServerLogger] = None
 
 
 async def setup_bot() -> None:
-    global tracker
+    global tracker, server_logger
 
     if not config.validate_config():
         raise RuntimeError("DISCORD_BOT_TOKEN is not configured.")
 
     tracker = YouTubeTracker(bot)
     await bot.add_cog(tracker)
+
+    server_logger = ServerLogger(bot)
+    await bot.add_cog(server_logger)
+
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")
 
@@ -80,8 +109,8 @@ async def ping(ctx: commands.Context) -> None:
 @bot.command(name="help")
 async def help_command(ctx: commands.Context) -> None:
     embed = discord.Embed(
-        title="YouTube Notification Bot",
-        description="Track YouTube channels and receive notifications for new uploads.",
+        title="Discord Notification Bot",
+        description="YouTube notifications plus server audit logging.",
         color=discord.Color.red(),
     )
     embed.add_field(
