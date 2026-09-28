@@ -164,6 +164,10 @@ class Database:
             )
 
             if needs_yt_migration:
+                # Existing indexes follow the renamed legacy table. Drop them
+                # before rebuilding so they can be recreated on the new table.
+                cursor.execute("DROP INDEX IF EXISTS idx_yt_monitored_guild")
+                cursor.execute("DROP INDEX IF EXISTS idx_yt_monitored_channel")
                 cursor.execute("ALTER TABLE yt_monitored_channels RENAME TO yt_monitored_channels_legacy")
                 cursor.execute("""
                     CREATE TABLE yt_monitored_channels (
@@ -196,6 +200,12 @@ class Database:
                 """)
                 cursor.execute("DROP TABLE yt_monitored_channels_legacy")
 
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_yt_monitored_guild ON yt_monitored_channels(guild_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_yt_monitored_channel ON yt_monitored_channels(yt_channel_id)"
+            )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_yt_monitored_route "
                 "ON yt_monitored_channels(guild_id, yt_channel_id, discord_target_channel_id)"
