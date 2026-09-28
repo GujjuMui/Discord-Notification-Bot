@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import config
 from database import db
@@ -82,10 +82,30 @@ class ServerLogger(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._history_cache_loaded: set[int] = set()
+        self._missing_log_alerted: set[tuple[int, int]] = set()
 
     # ------------------------------------------------------------------
     # Setup / routing
     # ------------------------------------------------------------------
+    async def cog_load(self) -> None:
+        self.message_retention_cleanup.start()
+
+    async def cog_unload(self) -> None:
+        self.message_retention_cleanup.cancel()
+
+    @tasks.loop(hours=24)
+    async def message_retention_cleanup(self) -> None:
+        try:
+            removed = db.cleanup_old_messages(days=30)
+            logger.info("Message retention cleanup removed %d cached messages older than 30 days.", removed)
+        except Exception:
+            logger.exception("Daily message retention cleanup failed.")
+
+    @message_retention_cleanup.before_loop
+    async def before_message_retention_cleanup(self) -> None:
+        await self.bot.wait_until_ready()
+
+
 
     async def configure_logs(
         self,
@@ -211,12 +231,47 @@ class ServerLogger(commands.Cog):
             if channel is None:
                 try:
                     channel = await self.bot.fetch_channel(channel_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                    logger.error("Configured audit log channel %s is unavailable: %s", channel_id, exc)
+                    await self._notify_missing_log_channel(guild_id, channel_id)
                     continue
             if hasattr(channel, "send"):
                 return channel
 
+        await self._notify_missing_log_channel(guild_id, 0)
         return None
+
+    async def _notify_missing_log_channel(self, guild_id: int, channel_id: int) -> None:
+        key = (guild_id, channel_id)
+        if key in self._missing_log_alerted:
+            return
+        self._missing_log_alerted.add(key)
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        target = f"<#{channel_id}>" if channel_id else "the configured audit log channels"
+        message = (
+            f"⚠️ I could not access {target}. Server audit logging will use another "
+            "configured log channel when possible. Run /setup_logs if the logging "
+            "channels need to be recreated or remapped."
+        )
+        try:
+            owner = guild.owner or await self.bot.fetch_user(guild.owner_id)
+            if owner:
+                await owner.send(message)
+                return
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning("Could not DM guild owner about missing audit log channel %s.", channel_id)
+
+        fallback = guild.system_channel
+        if fallback and hasattr(fallback, "send"):
+            try:
+                await fallback.send(message)
+            except (discord.Forbidden, discord.HTTPException):
+                logger.warning("Could not send missing audit log alert in guild %s.", guild_id)
+
 
     async def _send(
         self,
