@@ -1,4 +1,4 @@
-"""YouTube RSS monitoring and Discord notification commands."""
+"""Guild-scoped YouTube RSS monitoring and Discord notification commands."""
 
 from __future__ import annotations
 
@@ -58,13 +58,14 @@ class YouTubeTracker(commands.Cog):
     @tasks.loop(seconds=60)
     async def poll_loop(self) -> None:
         async with self._poll_lock:
-            for channel in db.get_active_channels():
+            for monitored in db.get_yt_monitored_channels():
                 try:
-                    await self._process_channel(channel)
+                    await self._process_channel(monitored)
                 except Exception:
                     logger.exception(
-                        "Failed to process YouTube channel %s",
-                        channel["channel_id"],
+                        "Failed to process YouTube channel %s for guild %s",
+                        monitored["yt_channel_id"],
+                        monitored["guild_id"],
                     )
 
     @poll_loop.before_loop
@@ -104,7 +105,7 @@ class YouTubeTracker(commands.Cog):
         )
 
     async def fetch_feed(self, channel_id: str) -> list[dict[str, Any]]:
-        xml = await self._fetch(config.YOUTUBE_RSS_URL.format(channel_id=channel_id))
+        xml = await self._fetch(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
         parsed = feedparser.parse(xml)
 
         if getattr(parsed, "bozo", False) and not parsed.entries:
@@ -210,7 +211,8 @@ class YouTubeTracker(commands.Cog):
                     notified=False,
                 )
 
-            target_id = channel["discord_channel_id"] or config.DISCORD_CHANNEL_ID
+            settings = db.get_guild_settings(int(channel["guild_id"]))
+            target_id = settings.get("yt_notification_channel_id") if settings else None
             if not target_id:
                 logger.warning(
                     "No Discord target configured for YouTube channel %s",
@@ -269,7 +271,7 @@ class YouTubeTracker(commands.Cog):
             return None
 
     async def add_channel(
-        self, url: str, discord_channel_id: Optional[int] = None
+        self, guild_id: int, url: str
     ) -> dict[str, Any]:
         channel_id = await self.resolve_channel_id(url)
         videos = await self.fetch_feed(channel_id)
@@ -280,114 +282,127 @@ class YouTubeTracker(commands.Cog):
             (v["channel_name"] for v in videos if v["channel_name"]),
             channel_id,
         )
-        db.add_channel(
-            channel_id=channel_id,
-            channel_name=channel_name,
-            channel_url=f"https://www.youtube.com/channel/{channel_id}",
-            discord_channel_id=discord_channel_id or config.DISCORD_CHANNEL_ID,
+        existing = db.get_yt_monitored_channel(guild_id, channel_id)
+        db.add_yt_monitored_channel(
+            guild_id=guild_id,
+            yt_channel_id=channel_id,
+            yt_channel_name=channel_name,
+            yt_channel_url=f"https://www.youtube.com/channel/{channel_id}",
+            last_video_id=existing.get("last_video_id") if existing else None,
         )
-        await self._prime_channel(channel_id)
+        if not existing:
+            await self._prime_channel(guild_id, channel_id)
         return {
             "channel_id": channel_id,
             "channel_name": channel_name,
             "video_count": len(videos),
+            "already_tracked": existing is not None,
         }
 
 
-def _manage_server():
-    return app_commands.checks.has_permissions(manage_guild=True)
+def _admin_only():
+    return app_commands.checks.has_permissions(administrator=True)
 
 
 def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
-    @bot.tree.command(name="addchannel", description="Start tracking a YouTube channel.")
-    @_manage_server()
+    @bot.tree.command(name="setup_logs", description="Set this server's audit log channel.")
+    @_admin_only()
+    @app_commands.describe(channel="Channel where server audit logs will be posted")
+    async def setup_logs(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+        db.set_audit_log_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(f"Audit logs will now be sent to {channel.mention}.", ephemeral=True)
+
+    @bot.tree.command(name="setup_yt", description="Set this server's YouTube notification channel.")
+    @_admin_only()
+    @app_commands.describe(channel="Channel where YouTube notifications will be posted")
+    async def setup_yt(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+        db.set_yt_notification_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(f"YouTube notifications will now be sent to {channel.mention}.", ephemeral=True)
+
+    @bot.tree.command(name="add_yt", description="Register a YouTube channel for this server.")
+    @_admin_only()
     @app_commands.describe(url="YouTube channel URL or @handle URL")
-    async def addchannel(interaction: discord.Interaction, url: str) -> None:
+    async def add_yt(interaction: discord.Interaction, url: str) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         try:
-            result = await tracker.add_channel(url)
+            result = await tracker.add_channel(interaction.guild.id, url)
+            status = "already tracked" if result["already_tracked"] else "now tracking"
             await interaction.followup.send(
-                f"Now tracking {result['channel_name']} ({result['channel_id']}). "
-                f"Seeded {result['video_count']} existing entries without notifying them.",
+                f"**{result['channel_name']}** ({result['channel_id']}) is {status}. "
+                f"Current RSS entries: {result['video_count']}.",
                 ephemeral=True,
             )
         except Exception as exc:
-            logger.exception("addchannel failed")
+            logger.exception("add_yt failed for guild %s", interaction.guild.id)
+            await interaction.followup.send(f"Could not add YouTube channel: {exc}", ephemeral=True)
+
+    @bot.tree.command(name="remove_yt", description="Remove a tracked YouTube channel from this server.")
+    @_admin_only()
+    @app_commands.describe(url_or_id="YouTube channel URL or channel ID")
+    async def remove_yt(interaction: discord.Interaction, url_or_id: str) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+        value = url_or_id.strip()
+        match = CHANNEL_ID_RE.search(value)
+        channel_id = match.group(0) if match else value
+        if not match and value.startswith(("http://", "https://")):
+            await interaction.response.defer(ephemeral=True)
+            try:
+                channel_id = await tracker.resolve_channel_id(value)
+            except Exception as exc:
+                await interaction.followup.send(f"Could not resolve that YouTube URL: {exc}", ephemeral=True)
+                return
+            changed = db.remove_yt_monitored_channel(interaction.guild.id, channel_id)
             await interaction.followup.send(
-                f"Could not add channel: {exc}", ephemeral=True
+                "YouTube channel removed from this server." if changed else "That YouTube channel is not tracked in this server.",
+                ephemeral=True,
             )
-
-    @bot.tree.command(name="removechannel", description="Stop tracking a YouTube channel.")
-    @_manage_server()
-    @app_commands.describe(channel_id="YouTube channel ID (UC...)")
-    async def removechannel(interaction: discord.Interaction, channel_id: str) -> None:
-        changed = db.remove_channel(channel_id.strip())
+            return
+        changed = db.remove_yt_monitored_channel(interaction.guild.id, channel_id)
         await interaction.response.send_message(
-            "Channel paused. Video history was kept to prevent duplicate notifications if re-added."
-            if changed else "Channel not found.",
+            "YouTube channel removed from this server." if changed else "That YouTube channel is not tracked in this server.",
             ephemeral=True,
         )
 
-    @bot.tree.command(name="listchannels", description="List tracked YouTube channels.")
-    @_manage_server()
-    async def listchannels(interaction: discord.Interaction) -> None:
-        channels = db.get_active_channels()
+    @bot.tree.command(name="list_yt", description="List this server's tracked YouTube channels.")
+    @_admin_only()
+    async def list_yt(interaction: discord.Interaction) -> None:
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+        channels = db.get_yt_monitored_channels(interaction.guild.id)
+        settings = db.get_guild_settings(interaction.guild.id)
+        target_id = settings.get("yt_notification_channel_id") if settings else None
         if not channels:
-            await interaction.response.send_message(
-                "No active YouTube channels are being tracked.", ephemeral=True
-            )
+            await interaction.response.send_message("No YouTube channels are currently tracked in this server.", ephemeral=True)
             return
-
-        lines = [
-            f"{c['channel_name']} ({c['channel_id']}) -> "
-            f"<#{c['discord_channel_id'] or config.DISCORD_CHANNEL_ID}>"
-            for c in channels
-        ]
-        await interaction.response.send_message("\\n".join(lines), ephemeral=True)
-
-    @bot.tree.command(
-        name="settarget",
-        description="Set the Discord notification channel for a YouTube channel.",
-    )
-    @_manage_server()
-    @app_commands.describe(
-        channel_id="YouTube channel ID (UC...)",
-        channel="Discord channel that receives notifications",
-    )
-    async def settarget(
-        interaction: discord.Interaction,
-        channel_id: str,
-        channel: discord.TextChannel,
-    ) -> None:
-        if not db.set_discord_channel(channel_id.strip(), channel.id):
-            await interaction.response.send_message(
-                "Channel not found.", ephemeral=True
+        target = f"<#{target_id}>" if target_id else "Not configured"
+        embed = discord.Embed(
+            title=f"📺 YouTube Tracking — {interaction.guild.name}",
+            description=f"Notification destination: {target}",
+            color=discord.Color.red(),
+        )
+        for item in channels:
+            embed.add_field(
+                name=item["yt_channel_name"][:256],
+                value=(
+                    f"[YouTube channel]({item['yt_channel_url']})\n"
+                    f"ID: {item['yt_channel_id']}\n"
+                    f"Destination: {target}"
+                )[:1024],
+                inline=False,
             )
-            return
-        await interaction.response.send_message(
-            f"Notifications for {channel_id} will be sent to {channel.mention}.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="pausechannel", description="Pause a YouTube channel.")
-    @_manage_server()
-    @app_commands.describe(channel_id="YouTube channel ID (UC...)")
-    async def pausechannel(interaction: discord.Interaction, channel_id: str) -> None:
-        changed = db.set_channel_active(channel_id.strip(), False)
-        await interaction.response.send_message(
-            "Channel paused." if changed else "Channel not found.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="resumechannel", description="Resume a YouTube channel.")
-    @_manage_server()
-    @app_commands.describe(channel_id="YouTube channel ID (UC...)")
-    async def resumechannel(interaction: discord.Interaction, channel_id: str) -> None:
-        changed = db.set_channel_active(channel_id.strip(), True)
-        await interaction.response.send_message(
-            "Channel resumed." if changed else "Channel not found.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="ytinfo", description="Resolve a YouTube URL to its channel ID.")
     @app_commands.describe(url="YouTube channel URL or @handle URL")
@@ -396,16 +411,10 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         try:
             channel_id = await tracker.resolve_channel_id(url)
             videos = await tracker.fetch_feed(channel_id)
-            name = next(
-                (v["channel_name"] for v in videos if v["channel_name"]),
-                channel_id,
-            )
+            name = next((v["channel_name"] for v in videos if v["channel_name"]), channel_id)
             await interaction.followup.send(
-                f"{name}\\nChannel ID: {channel_id}\\n"
-                f"RSS entries available: {len(videos)}",
+                f"{name}\nChannel ID: {channel_id}\nRSS entries available: {len(videos)}",
                 ephemeral=True,
             )
         except Exception as exc:
-            await interaction.followup.send(
-                f"Could not resolve channel: {exc}", ephemeral=True
-            )
+            await interaction.followup.send(f"Could not resolve channel: {exc}", ephemeral=True)
