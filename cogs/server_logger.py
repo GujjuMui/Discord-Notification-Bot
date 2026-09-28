@@ -392,6 +392,8 @@ class ServerLogger(commands.Cog):
             if index in consumed:
                 continue
             compact = self._compact_value(value)
+            if not str(name).strip() or not str(value).strip():
+                continue
             retained.append((str(name)[:256], compact, bool(inline or len(compact) <= 320)))
 
         embed = discord.Embed(
@@ -865,19 +867,27 @@ class ServerLogger(commands.Cog):
         after_avatar = self._avatar_url(after.avatar)
         if before_avatar != after_avatar:
             who = await self._executor_tag(after.guild, ("member_update",), after.id)
+            avatar_links = (
+                f"[Old]({before_avatar}) | [New]({after_avatar})"
+                if before_avatar and after_avatar
+                else f"[Old]({before_avatar}) | New: Default"
+                if before_avatar
+                else f"Old: Default | [New]({after_avatar})"
+                if after_avatar
+                else "Old: Default | New: Default"
+            )
             await self._send(
                 after.guild.id,
                 "profile",
                 "🖼️ Avatar / PFP Updated",
-                f"{after} ({after.id})",
+                "",
                 discord.Color.blurple(),
                 [
-                    ("Old Avatar", before_avatar or "Default / unavailable", False),
-                    ("New Avatar", after_avatar or "Default / unavailable", False),
-                    ("Executor", who, False),
+                    ("User", f"{after} ({after.id})", False),
+                    ("Avatar", avatar_links, True),
+                    ("Executor", who, True),
                 ],
-                thumbnail=after_avatar,
-                image=before_avatar,
+                thumbnail=after_avatar or before_avatar,
             )
 
     @commands.Cog.listener()
@@ -889,26 +899,35 @@ class ServerLogger(commands.Cog):
             member = guild.get_member(after.id)
             if member is None:
                 continue
-            fields = [
-                ("Before username", before.name, True),
-                ("After username", after.name, True),
-                ("Old Avatar", self._avatar_url(before.avatar) or "Default / unavailable", False),
-                ("New Avatar", self._avatar_url(after.avatar) or "Default / unavailable", False),
-            ]
+            old_avatar = self._avatar_url(before.avatar)
+            new_avatar = self._avatar_url(after.avatar)
+            avatar_links = (
+                f"[Old]({old_avatar}) | [New]({new_avatar})"
+                if old_avatar and new_avatar
+                else f"[Old]({old_avatar}) | New: Default"
+                if old_avatar
+                else f"Old: Default | [New]({new_avatar})"
+                if new_avatar
+                else "Old: Default | New: Default"
+            )
+            changes = []
+            if before.name != after.name:
+                changes.append(self._compact_change(before.name, after.name))
+            if old_avatar != new_avatar:
+                changes.append("• Avatar: **Updated**")
             await self._send(
                 guild.id,
                 "profile",
                 "👤 Global Profile Updated",
-                f"{after} ({after.id})",
+                "",
                 discord.Color.blurple(),
-                fields,
-                thumbnail=self._avatar_url(after.avatar),
-                image=self._avatar_url(before.avatar),
+                [
+                    ("User", f"{after} ({after.id})", False),
+                    ("Changes", " | ".join(changes) or "Profile updated", False),
+                    ("Avatar", avatar_links, True) if old_avatar != new_avatar else ("", "", True),
+                ],
+                thumbnail=new_avatar or old_avatar,
             )
-
-    # ------------------------------------------------------------------
-    # Roles
-    # ------------------------------------------------------------------
 
     @commands.Cog.listener()
     async def on_guild_role_create(self, role: discord.Role) -> None:
