@@ -576,6 +576,62 @@ class Database:
             rows = cursor.execute(query, params).fetchall()
             return [self._decode_message(row) for row in rows]
 
+    def count_cached_messages(self) -> int:
+        with self._cursor() as cursor:
+            row = cursor.execute("SELECT COUNT(*) AS count FROM message_cache").fetchone()
+            return int(row["count"])
+
+    def count_yt_feeds(self) -> int:
+        with self._cursor() as cursor:
+            row = cursor.execute(
+                "SELECT COUNT(DISTINCT yt_channel_id) AS count "
+                "FROM yt_monitored_channels WHERE CAST(discord_target_channel_id AS INTEGER) > 0"
+            ).fetchone()
+            return int(row["count"])
+
+    def count_yt_routes(self) -> int:
+        with self._cursor() as cursor:
+            row = cursor.execute(
+                "SELECT COUNT(*) AS count FROM yt_monitored_channels "
+                "WHERE CAST(discord_target_channel_id AS INTEGER) > 0"
+            ).fetchone()
+            return int(row["count"])
+
+    def database_size_bytes(self) -> int:
+        try:
+            return self.db_path.stat().st_size
+        except OSError:
+            return 0
+
+    def cleanup_old_messages(self, days: int = 30) -> int:
+        days = max(1, int(days))
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM message_cache "
+                "WHERE julianday(timestamp) < julianday('now', ?)",
+                (f"-{days} days",),
+            )
+            return cursor.rowcount
+
+    def table_counts(self) -> Dict[str, int]:
+        tables = (
+            "channels",
+            "videos",
+            "trusted_users",
+            "guild_settings",
+            "guild_log_channels",
+            "yt_monitored_channels",
+            "message_cache",
+        )
+        counts: Dict[str, int] = {}
+        with self._cursor() as cursor:
+            for table in tables:
+                row = cursor.execute(
+                    f"SELECT COUNT(*) AS count FROM {table}"
+                ).fetchone()
+                counts[table] = int(row["count"])
+        return counts
+
     def mark_message_deleted(self, message_id: int) -> Optional[Dict[str, Any]]:
         data = self.get_cached_message(message_id)
         if data:
