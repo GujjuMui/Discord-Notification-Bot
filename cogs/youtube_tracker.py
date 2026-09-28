@@ -617,7 +617,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         invite = f"https://discord.com/oauth2/authorize?client_id={app_id}&scope=bot%20applications.commands&permissions=2147601408"
         repo_url = "https://github.com/GujjuMui/Discord-Notification-Bot"
         embed.add_field(name="🔗 Quick Links", value=f"[Support]({repo_url}/issues) • [Invite]({invite}) • [GitHub]({repo_url}) • [Docs]({repo_url}#readme)", inline=False)
-        embed.set_footer(text="v2.0.0 • Developed / powered by GujjuMui")
+        embed.set_footer(text="v2.1.0 • Developed / powered by GujjuMui")
         await interaction.response.send_message(embed=embed)
 
 
