@@ -236,6 +236,7 @@ class ServerLogger(commands.Cog):
                     await self._notify_missing_log_channel(guild_id, channel_id)
                     continue
             if hasattr(channel, "send"):
+                self._missing_log_alerted.discard((guild_id, channel_id))
                 return channel
 
         await self._notify_missing_log_channel(guild_id, 0)
