@@ -13,22 +13,27 @@ ENV_FILE = PROJECT_ROOT / ".env"
 load_dotenv(ENV_FILE)
 
 DISCORD_BOT_TOKEN: Optional[str] = os.getenv("DISCORD_BOT_TOKEN")
+
+def _optional_channel_id(name: str, fallback: Optional[str] = None) -> Optional[int]:
+    value = os.getenv(name) or (os.getenv(fallback) if fallback else None)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a numeric Discord channel ID.") from exc
+
+NOTIFICATION_CHANNEL_ID = _optional_channel_id("NOTIFICATION_CHANNEL_ID", "DISCORD_CHANNEL_ID")
+DISCORD_CHANNEL_ID = NOTIFICATION_CHANNEL_ID
+AUDIT_LOG_CHANNEL_ID = _optional_channel_id("AUDIT_LOG_CHANNEL_ID")
 BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-DATABASE_PATH = PROJECT_ROOT / os.getenv("DATABASE_PATH", "youtube_bot.db")
+_db_value = Path(os.getenv("DATABASE_PATH", "youtube_bot.db"))
+DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_value
 HTTP_USER_AGENT = os.getenv(
     "HTTP_USER_AGENT",
     "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)",
 )
-
-try:
-    DISCORD_CHANNEL_ID: Optional[int] = (
-        int(os.environ["DISCORD_CHANNEL_ID"])
-        if os.getenv("DISCORD_CHANNEL_ID")
-        else None
-    )
-except ValueError as exc:
-    raise ValueError("DISCORD_CHANNEL_ID must be a numeric Discord channel ID.") from exc
 
 try:
     POLL_INTERVAL = max(30, int(os.getenv("POLL_INTERVAL", "60")))
