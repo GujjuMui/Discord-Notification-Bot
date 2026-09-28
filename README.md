@@ -1,234 +1,62 @@
 # YouTube Notification Bot
 
-A production-ready Discord bot that monitors YouTube channels and sends rich notifications when new videos are published.
+A Python Discord bot that polls YouTube RSS feeds and sends Discord embeds for new uploads.
 
-## Features
+## Stack
+- Python 3.9+
+- discord.py 2.x
+- aiohttp
+- feedparser
+- SQLite
+- python-dotenv
 
-- **RSS Feed Monitoring**: Polls YouTube RSS feeds every 60 seconds for instant detection
-- **Rich Discord Embeds**: Beautiful notifications with thumbnails, video info, and direct links
-- **Multi-Channel Support**: Track unlimited YouTube channels across multiple Discord servers
-- **Deduplication**: SQLite database prevents duplicate notifications
-- **Slash Commands**: Modern Discord slash commands for easy management
-- **Content Type Detection**: Supports videos, YouTube Shorts, and live streams
-- **Admin Controls**: Pause/resume tracking, set notification channels
+No YouTube API key is required. The tracker uses YouTube channel RSS feeds.
 
-## Quick Start
+## Project structure
 
-### 1. Prerequisites
+main.py - bot entry point
+config.py - environment configuration
+database.py - SQLite persistence and deduplication
+cogs/youtube_tracker.py - RSS polling, notifications, and slash commands
+requirements.txt - dependencies
+.env.example - configuration template
+.gitignore - excludes secrets and runtime files
 
-- Python 3.9 or higher
-- A Discord Bot Token ([Get one here](https://discord.com/developers/applications))
-- A Discord Server where you have admin permissions
+## Windows setup
 
-### 2. Installation
+Open CMD in the repository root:
 
-```bash
-# Clone or download the project
-cd "discord notif bot"
-
-# Create virtual environment (recommended)
-python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# Install dependencies
+python -m venv .venv
+.venv\\Scripts\\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### 3. Configuration
-
-```bash
-# Copy the example environment file
 copy .env.example .env
 
-# Edit .env with your bot token
-# DISCORD_BOT_TOKEN=your_actual_bot_token_here
-# DISCORD_CHANNEL_ID=your_channel_id_here
-```
+Edit .env and set DISCORD_BOT_TOKEN. DISCORD_CHANNEL_ID is optional; a per-channel target can be set with /settarget.
 
-### 4. Create Discord Bot
+Run with:
 
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click "New Application" and name it
-3. Go to "Bot" section and click "Add Bot"
-4. Copy the **Token** and paste it in your `.env` file
-5. Enable these **Privileged Gateway Intents**:
-   - Message Content Intent
-6. Go to "OAuth2" > "URL Generator"
-7. Select scopes: `bot`, `applications.commands`
-8. Select permissions: `Send Messages`, `Embed Links`, `Use Slash Commands`
-9. Copy the generated URL and invite the bot to your server
-
-### 5. Run the Bot
-
-```bash
 python main.py
-```
+
+## Discord setup
+
+Create a Discord application and bot, then invite it with the bot and applications.commands scopes. The bot needs Send Messages and Embed Links in the notification channel. Message Content Intent should be enabled if you want the legacy !ping command.
 
 ## Commands
 
-| Command | Description | Permission |
-|---------|-------------|------------|
-| `/addchannel <url>` | Add a YouTube channel to track | Manage Server |
-| `/removechannel <channel_id>` | Stop tracking a channel | Manage Server |
-| `/listchannels` | Show all tracked channels | Manage Server |
-| `/settarget <channel>` | Set Discord notification channel | Manage Server |
-| `/pausechannel <channel_id>` | Pause notifications for a channel | Manage Server |
-| `/resumechannel <channel_id>` | Resume notifications | Manage Server |
-| `/ytinfo <url>` | Get info about a YouTube channel | Manage Server |
-| `!ping` | Check bot latency | Everyone |
-| `!help` | Show help message | Everyone |
+/addchannel <url> - track a YouTube channel
+/removechannel <channel_id> - pause tracking without deleting video history
+/listchannels - list active channels
+/settarget <channel_id> <channel> - set notification destination
+/pausechannel <channel_id> - pause a channel
+/resumechannel <channel_id> - resume a channel
+/ytinfo <url> - resolve a YouTube channel URL
+!ping - check latency
 
-## Adding YouTube Channels
+## Deduplication
 
-### Supported URL Formats
+Each YouTube video ID is stored with a unique constraint in SQLite. Existing RSS entries are seeded when a channel is first added, so old videos are not announced. New videos are inserted as pending before delivery and marked notified only after Discord accepts the message. If delivery fails, the pending record can be retried. Pausing/removing a channel keeps its video history so re-adding it does not replay old uploads.
 
-- `https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxxxx` (Channel ID URL)
-- `https://www.youtube.com/@handle` (Handle URL)
-- `https://www.youtube.com/c/CustomName` (Custom URL - requires manual lookup)
+## Security
 
-### Example Usage
-
-```
-/addchannel https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw
-```
-
-## Database Schema
-
-The bot uses SQLite with three tables:
-
-### `channels`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER | Primary key |
-| channel_id | TEXT | YouTube channel ID |
-| channel_name | TEXT | Channel display name |
-| channel_url | TEXT | YouTube channel URL |
-| discord_channel_id | INTEGER | Discord notification channel |
-| is_active | INTEGER | Tracking status (1=active, 0=paused) |
-
-### `videos`
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER | Primary key |
-| video_id | TEXT | YouTube video ID (unique) |
-| channel_id | TEXT | Associated channel |
-| title | TEXT | Video title |
-| video_url | TEXT | Direct video URL |
-| thumbnail_url | TEXT | Thumbnail URL |
-| is_short | INTEGER | YouTube Short flag |
-| is_live | INTEGER | Live stream flag |
-
-### `settings`
-| Column | Type | Description |
-|--------|------|-------------|
-| key | TEXT | Setting key |
-| value | TEXT | Setting value |
-
-## Project Structure
-
-```
-discord notif bot/
-├── main.py              # Bot entry point
-├── config.py            # Environment configuration
-├── database.py          # SQLite database manager
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment template
-├── .env                 # Your configuration (create this)
-├── youtube_bot.db       # SQLite database (auto-created)
-├── README.md            # This file
-└── cogs/
-    ├── __init__.py
-    └── youtube_tracker.py  # YouTube monitoring logic
-```
-
-## Deployment
-
-### Docker
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "main.py"]
-```
-
-```bash
-docker build -t yt-notification-bot .
-docker run -d --name yt-bot --env-file .env yt-notification-bot
-```
-
-### Systemd (Linux)
-
-Create `/etc/systemd/system/yt-bot.service`:
-
-```ini
-[Unit]
-Description=YouTube Notification Bot
-After=network.target
-
-[Service]
-Type=simple
-User=youruser
-WorkingDirectory=/path/to/discord-notif-bot
-ExecStart=/path/to/discord-notif-bot/venv/bin/python main.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable yt-bot
-sudo systemctl start yt-bot
-```
-
-## Troubleshooting
-
-### Bot doesn't respond to commands
-- Ensure the bot has `applications.commands` scope
-- Check that slash commands are synced (check logs)
-- Verify the bot has permissions in the channel
-
-### No notifications being sent
-- Check if channels are being tracked: `/listchannels`
-- Verify Discord notification channel is set: `/settarget`
-- Check bot logs for RSS feed errors
-- Ensure channels are not paused
-
-### "Could not extract channel ID" error
-- Use the full channel URL format: `https://www.youtube.com/channel/UC...`
-- Custom URLs (`/c/name`) may require the actual channel ID
-
-## API Reference
-
-The bot uses YouTube's RSS feeds which don't require API keys:
-
-```
-https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Support
-
-For issues or feature requests, please open a GitHub issue.
+Never commit .env or bot tokens. The repository .gitignore excludes .env, SQLite databases, virtual environments, and Python cache files.
