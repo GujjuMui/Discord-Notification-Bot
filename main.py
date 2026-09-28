@@ -60,6 +60,9 @@ bot = commands.Bot(
     help_command=None,
 )
 
+# Exposed to public/about and private health dashboards without importing main from cogs.
+bot.bot_started_at = START_TIME
+
 tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
 bot_owner_id: Optional[int] = config.BOT_OWNER_ID
