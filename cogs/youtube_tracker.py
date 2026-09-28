@@ -399,7 +399,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(f"Audit logs will now be sent to {channel.mention}.", ephemeral=True)
 
     @bot.tree.command(name="setup_yt", description="Set this server's YouTube notification channel.")
-    @_admin_only()
+    @is_trusted_or_owner()
     @app_commands.describe(channel="Channel where YouTube notifications will be posted")
     async def setup_yt(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         if not interaction.guild:
@@ -409,7 +409,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(f"YouTube notifications will now be sent to {channel.mention}.", ephemeral=True)
 
     @bot.tree.command(name="add_yt", description="Register a YouTube channel for this server.")
-    @_admin_only()
+    @is_trusted_or_owner()
     @app_commands.describe(url="YouTube channel URL or @handle URL")
     async def add_yt(interaction: discord.Interaction, url: str) -> None:
         if not interaction.guild:
@@ -429,7 +429,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             await interaction.followup.send(f"Could not add YouTube channel: {exc}", ephemeral=True)
 
     @bot.tree.command(name="remove_yt", description="Remove a tracked YouTube channel from this server.")
-    @_admin_only()
+    @is_trusted_or_owner()
     @app_commands.describe(url_or_id="YouTube channel URL or channel ID")
     async def remove_yt(interaction: discord.Interaction, url_or_id: str) -> None:
         if not interaction.guild:
@@ -458,7 +458,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         )
 
     @bot.tree.command(name="list_yt", description="List this server's tracked YouTube channels.")
-    @_admin_only()
+    @is_trusted_or_owner()
     async def list_yt(interaction: discord.Interaction) -> None:
         if not interaction.guild:
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
