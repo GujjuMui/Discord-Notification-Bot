@@ -22,22 +22,10 @@ DISCORD_BOT_TOKEN: Optional[str] = os.getenv("DISCORD_BOT_TOKEN")
 _db_value = Path(os.getenv("DATABASE_PATH", "youtube_bot.db"))
 DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_value
 
-HTTP_USER_AGENT = os.getenv(
-    "HTTP_USER_AGENT",
-    "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)",
-)
-
-try:
-    POLL_INTERVAL = max(30, int(os.getenv("POLL_INTERVAL", "60")))
-except ValueError as exc:
-    raise ValueError("POLL_INTERVAL must be a whole number of seconds.") from exc
-
-try:
-    HTTP_TIMEOUT = max(5, int(os.getenv("HTTP_TIMEOUT", "20")))
-except ValueError as exc:
-    raise ValueError("HTTP_TIMEOUT must be a whole number of seconds.") from exc
-
-BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
+HTTP_USER_AGENT = "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)"
+POLL_INTERVAL = 60
+HTTP_TIMEOUT = 20
+BOT_PREFIX = "!"
 
 
 def get_required_token() -> str:
