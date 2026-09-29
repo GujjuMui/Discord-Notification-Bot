@@ -296,6 +296,60 @@ class YouTubeTracker(commands.Cog):
                 return str(item["url"])
         return None
 
+    @classmethod
+    def _live_items_from_page(
+        cls,
+        html: str,
+        channel_id: str,
+    ) -> list[dict[str, Any]]:
+        data = cls._extract_initial_data(html)
+        if not data:
+            return []
+        items: dict[str, dict[str, Any]] = {}
+        for node in cls._walk_json(data):
+            video_id = str(node.get("videoId") or "").strip()
+            if not video_id:
+                continue
+            title = cls._text(node.get("title")) or cls._text(node.get("headline")) or "Live Stream"
+            thumbnail_url = cls._thumbnail_from_node(node)
+            upcoming_data = node.get("upcomingEventData")
+            status = "UPCOMING" if upcoming_data else None
+            scheduled_start = None
+            if isinstance(upcoming_data, dict) and upcoming_data.get("startTime"):
+                try:
+                    scheduled_start = datetime.fromtimestamp(
+                        int(upcoming_data["startTime"]),
+                        tz=timezone.utc,
+                    ).isoformat()
+                except (TypeError, ValueError, OSError):
+                    scheduled_start = None
+
+            badges = " ".join(
+                cls._text(item.get("metadataBadgeRenderer", {}).get("label"))
+                for item in (node.get("badges") or [])
+                if isinstance(item, dict)
+            )
+            if "LIVE" in badges.upper():
+                status = "LIVE"
+
+            items[video_id] = {
+                "content_id": video_id,
+                "content_type": "live",
+                "channel_id": channel_id,
+                "channel_name": "",
+                "title": title,
+                "video_url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail_url": thumbnail_url,
+                "published_at": cls._text(node.get("publishedTimeText")) or None,
+                "description": cls._text(node.get("descriptionSnippet")),
+                "duration": cls._text(node.get("lengthText")) or None,
+                "status": status or "ENDED",
+                "scheduled_start": scheduled_start,
+                "post_text": None,
+                "post_images": [],
+            }
+        return list(items.values())
+
     async def _fetch_playlist_feed(
         self,
         playlist_id: str,
@@ -332,7 +386,7 @@ class YouTubeTracker(commands.Cog):
                 ),
                 "thumbnail_url": thumbnail_url,
                 "published_at": str(getattr(entry, "published", "") or "") or None,
-                "description": "",
+                "description": str(getattr(entry, "summary", "") or "")[:1500],
                 "duration": None,
                 "status": "UNKNOWN" if content_type == "live" else None,
                 "scheduled_start": None,
@@ -428,6 +482,14 @@ class YouTubeTracker(commands.Cog):
                 activity.extend(items)
             except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
                 logger.warning("Could not fetch YouTube %s feed for %s", content_type, channel_id)
+
+        try:
+            live_html = await self._fetch(
+                f"https://www.youtube.com/channel/{channel_id}/live"
+            )
+            activity.extend(self._live_items_from_page(live_html, channel_id))
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+            logger.warning("Could not fetch YouTube live page for %s", channel_id)
 
         try:
             html = await self._fetch(
