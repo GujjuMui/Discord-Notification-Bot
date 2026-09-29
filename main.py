@@ -53,7 +53,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "2.1.0"
+BOT_VERSION = "2.2.0"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
@@ -251,7 +251,7 @@ async def on_ready() -> None:
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name="for new YouTube videos",
+            name="for new YouTube activity",
         )
     )
 
