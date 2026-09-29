@@ -110,7 +110,7 @@ class HelpSelect(discord.ui.Select):
             ),
             "youtube": discord.Embed(
                 title="📺 YouTube Feed Routing",
-                description="/add_yt <url> <#target_channel> — subscribe a YouTube source.\n/remove_yt <url_or_id> [#target_channel] — remove one route or all routes.\n/list_yt — view all configured routes.\n/ytinfo <url> — resolve a YouTube channel and inspect its RSS feed.",
+                description="/add_yt <url> <#target_channel> [role] [types] — subscribe and filter content.\n/remove_yt <url_or_id> [#target_channel] — remove one route or all routes.\n/list_yt — view all configured routes.\n/ytinfo <url> — resolve a YouTube channel and inspect its RSS feed.",
                 color=discord.Color.red(),
             ),
             "logging": discord.Embed(
@@ -950,14 +950,14 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="✨ Mission", value="Deliver reliable YouTube notifications while preserving detailed, organized server activity history.", inline=False)
-        embed.add_field(name="📺 YouTube Routing", value="RSS-based monitoring with per-server, per-channel Discord destinations.", inline=True)
+        embed.add_field(name="📺 YouTube Routing", value="Multi-content YouTube monitoring with per-server, per-channel Discord destinations and granular filters.", inline=True)
         embed.add_field(name="📁 Audit Logging", value="8 dedicated channels covering chat, members, profiles, roles, channels, server, voice, and moderation.", inline=True)
         embed.add_field(name="📊 Live Stats", value=f"Servers: **{len(interaction.client.guilds)}**\nMonitored feeds: **{feed_count}**\nUptime: **{uptime}**\nGateway latency: **{latency}**", inline=False)
         app_id = interaction.client.user.id if interaction.client.user else 0
         invite = f"https://discord.com/oauth2/authorize?client_id={app_id}&scope=bot%20applications.commands&permissions=2147601408"
         repo_url = "https://github.com/GujjuMui/Discord-Notification-Bot"
         embed.add_field(name="🔗 Quick Links", value=f"[Support]({repo_url}/issues) • [Invite]({invite}) • [GitHub]({repo_url}) • [Docs]({repo_url}#readme)", inline=False)
-        embed.set_footer(text="v2.1.0 • Developed / powered by GujjuMui")
+        embed.set_footer(text="v2.2.0 • Developed / powered by GujjuMui")
         await interaction.response.send_message(embed=embed)
 
 
