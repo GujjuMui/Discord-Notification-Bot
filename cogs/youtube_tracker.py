@@ -292,9 +292,9 @@ class YouTubeTracker(commands.Cog):
     def _channel_name_from_html(cls, html: str) -> Optional[str]:
         """Extract the public YouTube channel display name from a channel page."""
         patterns = (
-            r'<meta[^>]+itemprop=["\\']name["\\'][^>]+content=["\\']([^"\\']+)["\\']',
-            r'<meta[^>]+property=["\\']og:title["\\'][^>]+content=["\\']([^"\\']+)["\\']',
-            r'<meta[^>]+name=["\\']title["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+            r"<meta[^>]+itemprop=[\"']name[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            r"<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            r"<meta[^>]+name=[\"']title[\"'][^>]+content=[\"']([^\"']+)[\"']",
         )
         for pattern in patterns:
             match = re.search(pattern, html, re.I)
