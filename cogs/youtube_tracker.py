@@ -1286,17 +1286,26 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 [target_user.id] if target_user else [],
                 selected_types,
             )
+            # @everyone is Discord's special default role. Its mention
+            # formatting can render as "@@everyone" inside an embed on some
+            # clients, so use plain text for the confirmation while the stored
+            # role ID remains the guild ID and the actual notification sender
+            # still uses a real mention.
+            if role:
+                role_display = "@everyone" if role.is_default() else role.mention
+                ping_text = f" and pings {role_display}."
+            else:
+                ping_text = "."
+            
             if result["already_tracked"]:
                 message = (
                     f"**{result['channel_name']}** is already subscribed to "
-                    f"{target_channel.mention}"
-                    + (f" and pings {role.mention}." if role else ".")
+                    f"{target_channel.mention}{ping_text}"
                 )
             else:
                 message = (
                     f"✅ Subscribed **{result['channel_name']}** → "
-                    f"Notifications will post in {target_channel.mention}"
-                    + (f" and ping {role.mention}." if role else ".")
+                    f"Notifications will post in {target_channel.mention}{ping_text}"
                 )
 
             embed = discord.Embed(
