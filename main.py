@@ -237,18 +237,20 @@ async def on_ready() -> None:
     if server_logger:
         logger.info("Categorized server logging is loaded.")
 
-    try:
-        # Commands are global. Do not PUT an empty guild command tree on every
-        # startup: doing so needlessly consumes Discord's command-sync rate limit
-        # and can delay the global sync by tens of seconds.
-        synced = await bot.tree.sync()
+    if config.SYNC_COMMANDS:
+        try:
+            synced = await bot.tree.sync()
+            logger.info(
+                "Synced %d global slash command(s): %s",
+                len(synced),
+                ", ".join(f"/{command.name}" for command in synced),
+            )
+        except discord.HTTPException:
+            logger.exception("Failed to sync slash commands.")
+    else:
         logger.info(
-            "Synced %d global slash command(s): %s",
-            len(synced),
-            ", ".join(f"/{command.name}" for command in synced),
+            "Automatic slash command sync disabled. Use /sync when a command tree update is needed."
         )
-    except discord.HTTPException:
-        logger.exception("Failed to sync slash commands.")
 
     await bot.change_presence(
         activity=discord.Activity(
