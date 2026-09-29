@@ -265,8 +265,8 @@ class YouTubeTracker(commands.Cog):
         text = cls._text(value)
         if not text:
             return None
-        match = re.search(r'https?://[^\\s<>"\\']+', text)
-        return match.group(0).rstrip(".,)") if match else None
+        match = re.search(r"https?://\\S+", text)
+        return match.group(0).rstrip('.,)<>\\"\'') if match else None
 
     @classmethod
     def _thumbnail_url(cls, item: dict[str, Any]) -> Optional[str]:
