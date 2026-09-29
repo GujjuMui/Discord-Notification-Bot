@@ -301,7 +301,7 @@ class YouTubeTracker(commands.Cog):
             if not match:
                 continue
             name = html_lib.unescape(match.group(1)).strip()
-            name = re.sub(r"\\s+", " ", name).strip()
+            name = re.sub(r"\s+", " ", name).strip()
             if name:
                 if name.lower().endswith(" - youtube"):
                     name = name[:-10].strip()
