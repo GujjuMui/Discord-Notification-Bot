@@ -440,6 +440,21 @@ class YouTubeTracker(commands.Cog):
                 or cls._text(node.get("headline"))
             )
             images: list[str] = []
+            poll_preview = None
+            for child in cls._walk_json(node):
+                poll = child.get("pollRenderer") or child.get("backstagePollRenderer") if isinstance(child, dict) else None
+                if isinstance(poll, dict):
+                    choices = poll.get("choices") or poll.get("pollChoice") or []
+                    labels = []
+                    if isinstance(choices, list):
+                        for choice in choices[:6]:
+                            if isinstance(choice, dict):
+                                label = cls._text(choice.get("text")) or cls._text(choice.get("choiceText"))
+                                if label:
+                                    labels.append(label)
+                    if labels:
+                        poll_preview = " • ".join(labels)
+                        break
             attachment = node.get("backstageAttachment") or node.get("backstageAttachmentRenderer")
             if isinstance(attachment, dict):
                 for child in cls._walk_json(attachment):
@@ -464,6 +479,7 @@ class YouTubeTracker(commands.Cog):
                 "scheduled_start": None,
                 "post_text": text or "New community post",
                 "post_images": list(dict.fromkeys(images))[:4],
+                "poll_preview": poll_preview,
             }
         return list(items.values())
 
@@ -697,6 +713,12 @@ class YouTubeTracker(commands.Cog):
                 inline=False,
             )
         elif content_type == "community":
+            if item.get("poll_preview"):
+                embed.add_field(
+                    name="Poll",
+                    value=str(item["poll_preview"])[:1024],
+                    inline=False,
+                )
             if item.get("post_images"):
                 embed.add_field(
                     name="Media",
