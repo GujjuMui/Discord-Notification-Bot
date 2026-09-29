@@ -265,7 +265,7 @@ class YouTubeTracker(commands.Cog):
         text = cls._text(value)
         if not text:
             return None
-        match = re.search(r"https?://[^\\s<>\'"]+", text)
+        match = re.search(r'https?://[^\\s<>"\\']+', text)
         return match.group(0).rstrip(".,)") if match else None
 
     @classmethod
