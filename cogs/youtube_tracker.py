@@ -351,6 +351,54 @@ class YouTubeTracker(commands.Cog):
             }
         return list(items.values())
 
+    @classmethod
+    def _short_items_from_page(cls, html: str, channel_id: str) -> list[dict[str, Any]]:
+        data = cls._extract_initial_data(html)
+        if not data:
+            return []
+        items: dict[str, dict[str, Any]] = {}
+        for node in cls._walk_json(data):
+            lockup = node.get("shortsLockupViewModel")
+            if not isinstance(lockup, dict):
+                continue
+            endpoint = (
+                lockup.get("onTap", {})
+                .get("innertubeCommand", {})
+                .get("reelWatchEndpoint", {})
+            )
+            video_id = str(endpoint.get("videoId") or "").strip()
+            if not video_id:
+                continue
+            title = cls._text(
+                lockup.get("overlayMetadata", {}).get("primaryText")
+            ) or "YouTube Short"
+            thumbnails = lockup.get("thumbnail", {}).get("sources", [])
+            thumbnail_url = None
+            if isinstance(thumbnails, list) and thumbnails:
+                last = thumbnails[-1]
+                if isinstance(last, dict):
+                    thumbnail_url = last.get("url")
+            items[video_id] = {
+                "content_id": video_id,
+                "content_type": "short",
+                "video_id": video_id,
+                "channel_id": channel_id,
+                "channel_name": "",
+                "title": title,
+                "video_url": f"https://www.youtube.com/shorts/{video_id}",
+                "thumbnail_url": thumbnail_url,
+                "published_at": None,
+                "description": "",
+                "duration": None,
+                "status": None,
+                "scheduled_start": None,
+                "post_text": None,
+                "post_images": [],
+                "is_short": True,
+                "is_live": False,
+            }
+        return list(items.values())
+
     async def _fetch_playlist_feed(
         self,
         playlist_id: str,
@@ -522,19 +570,18 @@ class YouTubeTracker(commands.Cog):
 
     async def fetch_channel_activity(self, channel_id: str) -> list[dict[str, Any]]:
         activity: list[dict[str, Any]] = []
-        feeds = (
-            (f"UULF{channel_id[2:]}", "video"),
-            (f"UUSH{channel_id[2:]}", "short"),
-            (f"UULV{channel_id[2:]}", "live"),
-        )
-        for playlist_id, content_type in feeds:
-            try:
-                items = await self._fetch_playlist_feed(playlist_id, channel_id, content_type)
-                if content_type == "live":
-                    items = await self._enrich_live_items(items)
-                activity.extend(items)
-            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-                logger.warning("Could not fetch YouTube %s feed for %s", content_type, channel_id)
+        try:
+            activity.extend(await self.fetch_feed(channel_id))
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+            logger.warning("Could not fetch documented YouTube video feed for %s", channel_id)
+
+        try:
+            shorts_html = await self._fetch(
+                f"https://www.youtube.com/channel/{channel_id}/shorts"
+            )
+            activity.extend(self._short_items_from_page(shorts_html, channel_id))
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+            logger.warning("Could not fetch YouTube Shorts page for %s", channel_id)
 
         try:
             live_html = await self._fetch(
@@ -553,11 +600,7 @@ class YouTubeTracker(commands.Cog):
             logger.warning("Could not fetch YouTube community surface for %s", channel_id)
 
         if not activity:
-            try:
-                activity = await self.fetch_feed(channel_id)
-            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-                logger.warning("Could not fetch documented YouTube video feed for %s", channel_id)
-                activity = []
+            activity = []
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         for item in activity:
             key = (item["content_id"], item["content_type"])
