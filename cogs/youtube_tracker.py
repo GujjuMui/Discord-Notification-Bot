@@ -222,47 +222,257 @@ class YouTubeTracker(commands.Cog):
             "Could not find the channel ID. Try a full /channel/UC... URL."
         )
 
-    async def fetch_feed(self, channel_id: str) -> list[dict[str, Any]]:
-        xml = await self._fetch(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")
+    @staticmethod
+    def _text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, dict):
+            if value.get("simpleText"):
+                return str(value["simpleText"]).strip()
+            runs = value.get("runs")
+            if isinstance(runs, list):
+                return "".join(str(run.get("text", "")) for run in runs if isinstance(run, dict)).strip()
+        return str(value).strip()
+
+    @staticmethod
+    def _walk_json(value: Any):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from YouTubeTracker._walk_json(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from YouTubeTracker._walk_json(child)
+
+    @staticmethod
+    def _extract_initial_data(html: str) -> Optional[dict[str, Any]]:
+        markers = ('var ytInitialData = ', 'window["ytInitialData"] = ', "window['ytInitialData'] = ")
+        start = -1
+        for marker in markers:
+            start = html.find(marker)
+            if start >= 0:
+                start += len(marker)
+                break
+        if start < 0:
+            return None
+        while start < len(html) and html[start].isspace():
+            start += 1
+        if start >= len(html) or html[start] != "{":
+            return None
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(html)):
+            char = html[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(html[start:index + 1])
+                    except json.JSONDecodeError:
+                        return None
+        return None
+
+    @classmethod
+    def _thumbnail_from_node(cls, node: dict[str, Any]) -> Optional[str]:
+        thumbnails = node.get("thumbnail", {}).get("thumbnails", [])
+        if isinstance(thumbnails, list) and thumbnails:
+            item = thumbnails[-1]
+            if isinstance(item, dict) and item.get("url"):
+                return str(item["url"])
+        return None
+
+    async def _fetch_playlist_feed(
+        self,
+        playlist_id: str,
+        channel_id: str,
+        content_type: str,
+    ) -> list[dict[str, Any]]:
+        xml = await self._fetch(
+            f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
+        )
         parsed = feedparser.parse(xml)
-
-        if getattr(parsed, "bozo", False) and not parsed.entries:
-            raise RuntimeError("YouTube RSS returned invalid or empty XML.")
-
-        videos: list[dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for entry in parsed.entries:
             video_id = str(getattr(entry, "yt_videoid", "") or "").strip()
             if not video_id:
-                entry_id = str(getattr(entry, "id", "") or "")
-                if entry_id.startswith("yt:video:"):
-                    video_id = entry_id.rsplit(":", 1)[-1]
-            if not video_id:
                 continue
-
-            thumbnail_url = None
             thumbnails = getattr(entry, "media_thumbnail", None)
+            thumbnail_url = None
             if thumbnails:
                 try:
                     thumbnail_url = thumbnails[0].get("url")
                 except (IndexError, AttributeError, TypeError):
                     pass
-
-            author = str(getattr(entry, "author", "") or "").strip()
-            videos.append({
+            items.append({
+                "content_id": video_id,
+                "content_type": content_type,
                 "video_id": video_id,
                 "channel_id": channel_id,
-                "channel_name": author,
-                "title": str(getattr(entry, "title", "Untitled video")),
-                "video_url": str(
-                    getattr(entry, "link", "")
-                    or f"https://www.youtube.com/watch?v={video_id}"
+                "channel_name": str(getattr(entry, "author", "") or "").strip(),
+                "title": str(getattr(entry, "title", "Untitled")),
+                "video_url": (
+                    f"https://www.youtube.com/shorts/{video_id}"
+                    if content_type == "short"
+                    else f"https://www.youtube.com/watch?v={video_id}"
                 ),
                 "thumbnail_url": thumbnail_url,
                 "published_at": str(getattr(entry, "published", "") or "") or None,
-                "is_short": False,
-                "is_live": False,
+                "description": "",
+                "duration": None,
+                "status": "UNKNOWN" if content_type == "live" else None,
+                "scheduled_start": None,
+                "post_text": None,
+                "post_images": [],
+                "is_short": content_type == "short",
+                "is_live": content_type == "live",
             })
-        return videos
+        return items
+
+    async def fetch_feed(self, channel_id: str) -> list[dict[str, Any]]:
+        return await self._fetch_playlist_feed(channel_id, channel_id, "video")
+
+    async def _enrich_live_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for item in items[:8]:
+            try:
+                html = await self._fetch(item["video_url"])
+                if re.search(r'"isLiveNow":true|\\\"isLiveNow\\\":true', html):
+                    item["status"] = "LIVE"
+                elif "upcomingEventData" in html or re.search(r'"isUpcoming":true|\\\"isUpcoming\\\":true', html):
+                    item["status"] = "UPCOMING"
+                else:
+                    item["status"] = "ENDED"
+                match = re.search(r'"startTime":"(\d+)"', html)
+                if match:
+                    item["scheduled_start"] = datetime.fromtimestamp(
+                        int(match.group(1)),
+                        tz=timezone.utc,
+                    ).isoformat()
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+                logger.debug("Could not enrich live item %s", item["content_id"])
+        return items
+
+    @classmethod
+    def _community_items_from_page(
+        cls,
+        html: str,
+        channel_id: str,
+    ) -> list[dict[str, Any]]:
+        data = cls._extract_initial_data(html)
+        if not data:
+            return []
+        items: dict[str, dict[str, Any]] = {}
+        for node in cls._walk_json(data):
+            post_id = str(node.get("postId") or node.get("externalPostId") or "").strip()
+            if not post_id:
+                continue
+            text = (
+                cls._text(node.get("contentText"))
+                or cls._text(node.get("content"))
+                or cls._text(node.get("headline"))
+            )
+            images: list[str] = []
+            attachment = node.get("backstageAttachment") or node.get("backstageAttachmentRenderer")
+            if isinstance(attachment, dict):
+                for child in cls._walk_json(attachment):
+                    image = child.get("image") if isinstance(child, dict) else None
+                    thumbs = image.get("thumbnails", []) if isinstance(image, dict) else []
+                    if isinstance(thumbs, list) and thumbs:
+                        url = thumbs[-1].get("url") if isinstance(thumbs[-1], dict) else None
+                        if url:
+                            images.append(str(url))
+            items[post_id] = {
+                "content_id": post_id,
+                "content_type": "community",
+                "channel_id": channel_id,
+                "channel_name": "",
+                "title": "Community Post",
+                "video_url": f"https://www.youtube.com/post/{post_id}",
+                "thumbnail_url": images[0] if images else None,
+                "published_at": None,
+                "description": "",
+                "duration": None,
+                "status": None,
+                "scheduled_start": None,
+                "post_text": text or "New community post",
+                "post_images": list(dict.fromkeys(images))[:4],
+            }
+        return list(items.values())
+
+    async def fetch_channel_activity(self, channel_id: str) -> list[dict[str, Any]]:
+        activity: list[dict[str, Any]] = []
+        feeds = (
+            (f"UULF{channel_id[2:]}", "video"),
+            (f"UUSH{channel_id[2:]}", "short"),
+            (f"UULV{channel_id[2:]}", "live"),
+        )
+        for playlist_id, content_type in feeds:
+            try:
+                items = await self._fetch_playlist_feed(playlist_id, channel_id, content_type)
+                if content_type == "live":
+                    items = await self._enrich_live_items(items)
+                activity.extend(items)
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+                logger.warning("Could not fetch YouTube %s feed for %s", content_type, channel_id)
+
+        try:
+            html = await self._fetch(
+                f"https://www.youtube.com/channel/{channel_id}/community"
+            )
+            activity.extend(self._community_items_from_page(html, channel_id))
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+            logger.warning("Could not fetch YouTube community surface for %s", channel_id)
+
+        if not activity:
+            activity = await self.fetch_feed(channel_id)
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in activity:
+            key = (item["content_id"], item["content_type"])
+            if key not in merged:
+                merged[key] = item
+            else:
+                for field in (
+                    "thumbnail_url",
+                    "published_at",
+                    "duration",
+                    "status",
+                    "scheduled_start",
+                    "description",
+                ):
+                    if item.get(field):
+                        merged[key][field] = item[field]
+        return list(merged.values())
+
+    async def _prime_subscription(
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        subscription: dict[str, Any],
+        activity: list[dict[str, Any]],
+    ) -> None:
+        enabled = self._normalize_content_types(subscription.get("content_types"))
+        for item in activity:
+            if item["content_type"] in enabled:
+                db.mark_yt_content_notified(
+                    guild_id,
+                    yt_channel_id,
+                    item["content_id"],
+                    item["content_type"],
+                )
 
     async def _prime_subscription(
         self,
