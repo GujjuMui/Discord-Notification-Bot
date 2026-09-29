@@ -1024,18 +1024,29 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 ephemeral=True,
             )
 
-    @bot.tree.command(name="add_yt", description="Register a YouTube channel, destination, and optional role ping.")
+    @bot.tree.command(name="add_yt", description="Register a YouTube channel, destination, role, and content filter.")
     @is_trusted_or_owner()
     @app_commands.describe(
         url="YouTube channel URL or @handle URL",
         target_channel="Discord channel where notifications for this YouTube source will be posted",
-        role="Optional role to ping when a new video is detected",
+        role="Optional role to ping for matching activity",
+        types="Content types: all, videos, shorts, live, or community",
+    )
+    @app_commands.choices(
+        types=[
+            app_commands.Choice(name="all", value="all"),
+            app_commands.Choice(name="videos", value="videos"),
+            app_commands.Choice(name="shorts", value="shorts"),
+            app_commands.Choice(name="live", value="live"),
+            app_commands.Choice(name="community", value="community"),
+        ]
     )
     async def add_yt(
         interaction: discord.Interaction,
         url: str,
         target_channel: discord.TextChannel,
         role: Optional[discord.Role] = None,
+        types: Optional[app_commands.Choice[str]] = None,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
@@ -1045,12 +1056,14 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             return
 
         await interaction.response.defer(ephemeral=True)
+        selected_types = types.value if types else "all"
         try:
             result = await tracker.add_channel(
                 interaction.guild.id,
                 url,
                 target_channel.id,
                 role.id if role else None,
+                selected_types,
             )
             if result["already_tracked"]:
                 message = (
@@ -1069,6 +1082,11 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 title="YouTube Subscription",
                 description=message,
                 color=discord.Color.green(),
+            )
+            embed.add_field(
+                name="Content Filter",
+                value=f"**{selected_types}**",
+                inline=True,
             )
             embed.add_field(
                 name="YouTube Channel",
@@ -1158,7 +1176,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
         await interaction.response.send_message(message, ephemeral=True)
 
-    @bot.tree.command(name="list_yt", description="List this server's tracked YouTube subscriptions.")
+    @bot.tree.command(name="list_yt", description="List tracked YouTube sources, destinations, and content filters.")
     @is_trusted_or_owner()
     async def list_yt(interaction: discord.Interaction) -> None:
         if not interaction.guild:
@@ -1192,9 +1210,10 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 target_id = int(item["discord_target_channel_id"])
                 target = f"<#{target_id}>" if target_id > 0 else "Not configured"
                 ping_role = f"<@&{item['ping_role_id']}>" if item.get("ping_role_id") else "None"
+                filters = item.get("content_types") or "all"
                 destinations.append(
                     f"• [{item['yt_channel_name']}]({item['yt_channel_url']}) ➔ {target} "
-                    f"(Pings: {ping_role})"
+                    f"(Filters: {filters} | Pings: {ping_role})"
                 )
 
             embed.add_field(
