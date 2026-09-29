@@ -905,7 +905,9 @@ class YouTubeTracker(commands.Cog):
         # Keep the URL out of Discord's automatic preview in the header while
         # the embed itself owns the visual thumbnail/card.
         ping_parts = [f"<@{user_id}>" for user_id in (ping_user_ids or [])]
-        if ping_role_id:
+        # Never render the guild's special @everyone role as a role mention.
+        # A normal role ID is always distinct from the guild ID.
+        if ping_role_id and (guild_id is None or int(ping_role_id) != int(guild_id)):
             ping_parts.append(f"<@&{ping_role_id}>")
         header_message = f"New video from **{channel_name}**! Watch here: <{url}>"
         content = " ".join([header_message, *ping_parts]).strip()
@@ -977,6 +979,15 @@ class YouTubeTracker(commands.Cog):
         ping_user_ids: Optional[list[int]] = None,
         content_types: str = "all",
     ) -> dict[str, Any]:
+        # Discord represents the special @everyone role using the guild ID.
+        # It is not a normal role ping and should never be stored as a YouTube
+        # notification role.
+        if ping_role_id is not None and int(ping_role_id) == int(guild_id):
+            raise ValueError(
+                "The @everyone role cannot be used as a YouTube notification role. "
+                "Select a normal Discord role instead."
+            )
+
         channel_id = await self.resolve_channel_id(url)
         activity = await self.fetch_channel_activity(channel_id)
         channel_name = next(
@@ -1243,7 +1254,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     @app_commands.describe(
         url="YouTube channel URL or @handle URL",
         target_channel="Discord channel where notifications for this YouTube source will be posted",
-        role="Optional role to ping for matching activity",
+        role="Optional normal role to ping (do not select @everyone)",
         target_user="Optional user to ping for matching activity",
         types="Content types: all, videos, shorts, live, or community",
     )
@@ -1426,7 +1437,14 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             for item in subscriptions:
                 target_id = int(item["discord_target_channel_id"])
                 target = f"<#{target_id}>" if target_id > 0 else "Not configured"
-                ping_role = f"<@&{item['ping_role_id']}>" if item.get("ping_role_id") else "None"
+                stored_role_id = int(item["ping_role_id"]) if item.get("ping_role_id") else None
+                # The guild ID is Discord's special @everyone role ID. Treat
+                # legacy/bad configurations using it as no configured role.
+                ping_role = (
+                    f"<@&{stored_role_id}>"
+                    if stored_role_id and stored_role_id != int(interaction.guild.id)
+                    else "None"
+                )
                 ping_users = db.decode_yt_ping_users(item.get("ping_user_ids"))
                 ping_user_text = ", ".join(f"<@{user_id}>" for user_id in ping_users) or "None"
                 filters = item.get("content_types") or "all"
