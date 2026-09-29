@@ -845,6 +845,7 @@ class YouTubeTracker(commands.Cog):
             yt_channel_url=f"https://www.youtube.com/channel/{channel_id}",
             discord_target_channel_id=discord_target_channel_id,
             ping_role_id=ping_role_id,
+            ping_user_ids=ping_user_ids,
             content_types=content_types,
             last_video_id=existing.get("last_video_id") if existing else None,
         )
@@ -875,6 +876,7 @@ class YouTubeTracker(commands.Cog):
             "already_tracked": existing is not None,
             "discord_target_channel_id": discord_target_channel_id,
             "ping_role_id": ping_role_id,
+            "ping_user_ids": ping_user_ids or [],
             "content_types": content_types,
             "channel_url": f"https://www.youtube.com/channel/{channel_id}",
         }
