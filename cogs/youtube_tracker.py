@@ -20,6 +20,7 @@ from discord.ext import commands, tasks
 
 import config
 from database import db
+from utils.helpers import format_mentions, extract_mention_ids
 
 logger = logging.getLogger(__name__)
 
@@ -601,6 +602,7 @@ class YouTubeTracker(commands.Cog):
                     int(subscription["ping_role_id"])
                     if subscription.get("ping_role_id")
                     else None,
+                    db.decode_yt_ping_users(subscription.get("ping_user_ids")),
                 )
                 if sent:
                     db.mark_yt_content_notified(
@@ -629,6 +631,7 @@ class YouTubeTracker(commands.Cog):
         item: dict[str, Any],
         guild_id: Optional[int] = None,
         ping_role_id: Optional[int] = None,
+        ping_user_ids: Optional[list[int]] = None,
     ) -> bool:
         channel = self.bot.get_channel(discord_channel_id)
         if channel is None:
@@ -743,12 +746,20 @@ class YouTubeTracker(commands.Cog):
         )
         embed.set_footer(text=footer)
 
-        content = f"Hey <@&{ping_role_id}>! {embed_title}" if ping_role_id else embed_title
+        ping_parts = [f"<@{user_id}>" for user_id in (ping_user_ids or [])]
+        if ping_role_id:
+            ping_parts.insert(0, f"<@&{ping_role_id}>")
+        content = " ".join(ping_parts + [embed_title]).strip()
         try:
             await channel.send(
                 content=content,
                 embed=embed,
-                allowed_mentions=discord.AllowedMentions(roles=True),
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=True,
+                    roles=bool(ping_role_id),
+                    users=bool(ping_user_ids),
+                    replied_user=True,
+                ),
             )
             if guild_id is not None:
                 self._missing_target_alerted.discard((guild_id, discord_channel_id))
@@ -812,6 +823,7 @@ class YouTubeTracker(commands.Cog):
         url: str,
         discord_target_channel_id: int,
         ping_role_id: Optional[int] = None,
+        ping_user_ids: Optional[list[int]] = None,
         content_types: str = "all",
     ) -> dict[str, Any]:
         channel_id = await self.resolve_channel_id(url)
