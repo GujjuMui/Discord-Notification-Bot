@@ -514,113 +514,96 @@ class YouTubeTracker(commands.Cog):
 
         return oldest_first[cursor_index + 1:]
 
-    async def _dispatch_feed(
+    @staticmethod
+    def _normalize_content_types(value: Optional[str]) -> set[str]:
+        raw = str(value or "all").strip().lower()
+        if raw == "all":
+            return {"video", "short", "live", "community"}
+        allowed = {
+            "videos": "video",
+            "video": "video",
+            "shorts": "short",
+            "short": "short",
+            "live": "live",
+            "community": "community",
+        }
+        result = {
+            allowed[token.strip()]
+            for token in raw.replace(";", ",").split(",")
+            if token.strip() in allowed
+        }
+        return result or {"video", "short", "live", "community"}
+
+    async def _dispatch_activity(
         self,
         yt_channel_id: str,
-        videos: list[dict[str, Any]],
+        activity: list[dict[str, Any]],
         subscriptions: list[dict[str, Any]],
     ) -> None:
-        if not videos:
-            logger.warning("RSS returned no entries for %s", yt_channel_id)
+        if not activity:
+            logger.warning("No YouTube activity detected for %s", yt_channel_id)
             return
-
-        # Fetch the RSS feed once, then route each new video to every
-        # subscribed Discord target concurrently.
-        oldest_first = list(reversed(videos))
-        pending: dict[str, list[dict[str, Any]]] = {}
 
         for subscription in subscriptions:
             guild_id = int(subscription["guild_id"])
             target_id = int(subscription["discord_target_channel_id"])
-            last_video_id = subscription.get("last_video_id")
-
             if target_id <= 0:
-                logger.warning(
-                    "Skipping YouTube subscription %s/%s with no valid Discord target",
-                    guild_id,
-                    yt_channel_id,
-                )
                 continue
-
-            if not last_video_id:
-                db.update_yt_last_video(
-                    guild_id,
-                    yt_channel_id,
-                    target_id,
-                    oldest_first[-1]["video_id"],
-                )
-                continue
-
-            try:
-                cursor_index = next(
-                    i for i, video in enumerate(oldest_first)
-                    if video["video_id"] == last_video_id
-                )
-            except StopIteration:
-                db.update_yt_last_video(
-                    guild_id,
-                    yt_channel_id,
-                    target_id,
-                    oldest_first[-1]["video_id"],
-                )
-                continue
-
-            for video in oldest_first[cursor_index + 1:]:
-                pending.setdefault(video["video_id"], []).append(subscription)
-
-        for video in oldest_first:
-            targets = pending.get(video["video_id"], [])
-            if not targets:
-                continue
-
-            results = await asyncio.gather(
-                *[
-                    self._send_notification(
-                        int(subscription["discord_target_channel_id"]),
-                        video,
-                        int(subscription["guild_id"]),
-                        int(subscription["ping_role_id"]) if subscription.get("ping_role_id") else None,
-                    )
-                    for subscription in targets
-                ],
-                return_exceptions=True,
+            enabled = self._normalize_content_types(subscription.get("content_types"))
+            route_items = [
+                item for item in activity
+                if item["content_type"] in enabled
+            ]
+            route_items.sort(
+                key=lambda item: self._parse_datetime(item.get("published_at"))
+                or datetime.min.replace(tzinfo=timezone.utc)
             )
 
-            for subscription, result in zip(targets, results):
-                if isinstance(result, Exception):
-                    logger.exception(
-                        "Failed dispatching video %s to Discord target %s",
-                        video["video_id"],
-                        subscription["discord_target_channel_id"],
-                        exc_info=result,
-                    )
-                    continue
-
-                if not result:
-                    continue
-
-                db.add_video(
-                    video_id=video["video_id"],
-                    channel_id=video["channel_id"],
-                    title=video["title"],
-                    video_url=video["video_url"],
-                    thumbnail_url=video["thumbnail_url"],
-                    published_at=video["published_at"],
-                    is_short=video["is_short"],
-                    is_live=video["is_live"],
-                    notified=True,
-                )
-                db.update_yt_last_video(
-                    int(subscription["guild_id"]),
+            for item in route_items:
+                content_id = item["content_id"]
+                content_type = item["content_type"]
+                if db.has_yt_content_been_notified(
+                    guild_id,
                     yt_channel_id,
-                    int(subscription["discord_target_channel_id"]),
-                    video["video_id"],
+                    content_id,
+                    content_type,
+                ):
+                    continue
+                if not item.get("channel_name"):
+                    item["channel_name"] = subscription.get("yt_channel_name") or "YouTube"
+
+                sent = await self._send_notification(
+                    target_id,
+                    item,
+                    guild_id,
+                    int(subscription["ping_role_id"])
+                    if subscription.get("ping_role_id")
+                    else None,
                 )
+                if sent:
+                    db.mark_yt_content_notified(
+                        guild_id,
+                        yt_channel_id,
+                        content_id,
+                        content_type,
+                    )
+                    if content_type in {"video", "short"}:
+                        db.add_video(
+                            video_id=content_id,
+                            channel_id=yt_channel_id,
+                            title=item["title"],
+                            video_url=item["video_url"],
+                            thumbnail_url=item.get("thumbnail_url"),
+                            published_at=item.get("published_at"),
+                            is_short=content_type == "short",
+                            is_live=False,
+                            notified=True,
+                        )
 
     async def _send_notification(
         self,
         discord_channel_id: int,
-        video: dict[str, Any],
+        item: dict[str, Any],
         guild_id: Optional[int] = None,
         ping_role_id: Optional[int] = None,
     ) -> bool:
@@ -629,53 +612,131 @@ class YouTubeTracker(commands.Cog):
             try:
                 channel = await self.bot.fetch_channel(discord_channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                logger.error("YouTube target channel %s is unavailable: %s", discord_channel_id, exc)
+                logger.error(
+                    "YouTube target channel %s is unavailable: %s",
+                    discord_channel_id,
+                    exc,
+                )
                 if guild_id is not None:
                     await self._notify_missing_target(guild_id, discord_channel_id)
                 return False
 
         if not hasattr(channel, "send"):
-            logger.error("Discord channel %s is not sendable", discord_channel_id)
-            if guild_id is not None:
-                await self._notify_missing_target(guild_id, discord_channel_id)
             return False
 
-        channel_name = video.get("channel_name") or "YouTube"
+        content_type = item.get("content_type", "video")
+        channel_name = item.get("channel_name") or "YouTube"
+        title = item.get("title") or "Untitled"
+        url = item.get("video_url") or f"https://www.youtube.com/watch?v={item['content_id']}"
+
+        if content_type == "short":
+            color = 0xE62117
+            embed_title = f"📱 New Short: {title}"
+            description = f"**{channel_name}** published a new YouTube Short."
+            footer = "YouTube Notification Bot • New Short"
+        elif content_type == "live":
+            upcoming = item.get("status") == "UPCOMING"
+            color = 0xFF0033
+            embed_title = (
+                f"📅 Scheduled Stream: {title}"
+                if upcoming
+                else f"🔴 LIVE NOW: {title}"
+            )
+            description = (
+                f"**{channel_name}** has scheduled a live stream."
+                if upcoming
+                else f"**{channel_name}** is LIVE now!"
+            )
+            footer = "YouTube Notification Bot • Live Stream"
+        elif content_type == "community":
+            color = 0x4A90E2
+            embed_title = f"💬 New Community Post from {channel_name}"
+            description = item.get("post_text") or "New community post."
+            footer = "YouTube Notification Bot • Community Post"
+        else:
+            color = 0xFF0000
+            embed_title = f"🎥 New Video: {title}"
+            description = f"**{channel_name}** just uploaded a new video."
+            footer = "YouTube Notification Bot • New Video"
+
         embed = discord.Embed(
-            title=f"🎥 {video['title']}",
-            url=video["video_url"],
-            description=f"**{channel_name}** just uploaded a new video!",
-            color=discord.Color(0xFF0000),
+            title=embed_title,
+            url=url,
+            description=str(description)[:4096],
+            color=discord.Color(color),
         )
         embed.add_field(name="Channel", value=f"**{channel_name}**", inline=True)
-        if video.get("published_at"):
-            embed.add_field(name="Published", value=str(video["published_at"]), inline=True)
-        embed.add_field(name="Video", value=f"[Watch on YouTube]({video['video_url']})", inline=False)
 
-        published = self._parse_datetime(video.get("published_at"))
-        if published:
-            embed.timestamp = published
-        if video.get("thumbnail_url"):
-            embed.set_image(url=video["thumbnail_url"])
-        embed.set_footer(text="YouTube Notification Bot • New upload")
+        if content_type == "video":
+            embed.add_field(
+                name="Details",
+                value=(
+                    f"Length: **{item.get('duration') or 'Unknown'}**\n"
+                    f"Description: **{item.get('description') or 'No description preview available.'}**"
+                )[:1024],
+                inline=False,
+            )
+        elif content_type == "short":
+            embed.add_field(
+                name="Short",
+                value=f"[Open directly in Shorts]({url})",
+                inline=False,
+            )
+        elif content_type == "live":
+            status = item.get("status") or "LIVE"
+            scheduled = item.get("scheduled_start") or "Not provided"
+            embed.add_field(
+                name="Stream Status",
+                value=f"**{status}** • Scheduled start: **{scheduled}**",
+                inline=False,
+            )
+        elif content_type == "community":
+            if item.get("post_images"):
+                embed.add_field(
+                    name="Media",
+                    value=" • ".join(
+                        f"[Image {index}]({image})"
+                        for index, image in enumerate(item["post_images"], 1)
+                    )[:1024],
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name="Post",
+                    value=str(item.get("post_text") or "New post.")[:1024],
+                    inline=False,
+                )
 
-        content = (
-            f"Hey <@&{ping_role_id}>! **[{channel_name}]** just uploaded a new video!"
-            if ping_role_id
-            else f"**{channel_name}** just uploaded a new video!"
+        if item.get("thumbnail_url"):
+            embed.set_image(url=item["thumbnail_url"])
+        embed.timestamp = (
+            self._parse_datetime(item.get("published_at"))
+            or datetime.now(timezone.utc)
         )
+        embed.set_footer(text=footer)
+
+        content = f"Hey <@&{ping_role_id}>! {embed_title}" if ping_role_id else embed_title
         try:
             await channel.send(
-                content=content or None,
+                content=content,
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
             if guild_id is not None:
                 self._missing_target_alerted.discard((guild_id, discord_channel_id))
-            logger.info("Sent notification for video %s", video["video_id"])
+            logger.info(
+                "Sent YouTube %s notification for %s",
+                content_type,
+                item["content_id"],
+            )
             return True
         except (discord.Forbidden, discord.HTTPException) as exc:
-            logger.error("Failed to send notification for %s: %s", video["video_id"], exc)
+            logger.error(
+                "Failed to send YouTube %s notification for %s: %s",
+                content_type,
+                item["content_id"],
+                exc,
+            )
             if guild_id is not None and isinstance(exc, discord.Forbidden):
                 await self._notify_missing_target(guild_id, discord_channel_id)
             return False
