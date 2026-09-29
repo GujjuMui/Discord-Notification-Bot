@@ -698,18 +698,17 @@ class YouTubeTracker(commands.Cog):
             description = f"**{channel_name}** published a new YouTube Short."
             footer = "YouTube Notification Bot • New Short"
         elif content_type == "live":
-            upcoming = item.get("status") == "UPCOMING"
+            status = item.get("status") or "UNKNOWN"
             color = 0xFF0033
-            embed_title = (
-                f"📅 Scheduled Stream: {title}"
-                if upcoming
-                else f"🔴 LIVE NOW: {title}"
-            )
-            description = (
-                f"**{channel_name}** has scheduled a live stream."
-                if upcoming
-                else f"**{channel_name}** is LIVE now!"
-            )
+            if status == "UPCOMING":
+                embed_title = f"📅 Scheduled Stream: {title}"
+                description = f"**{channel_name}** has scheduled a live stream."
+            elif status == "LIVE":
+                embed_title = f"🔴 LIVE NOW: {title}"
+                description = f"**{channel_name}** is LIVE now!"
+            else:
+                embed_title = f"🏁 Stream Ended: {title}"
+                description = f"**{channel_name}**'s live stream has ended."
             footer = "YouTube Notification Bot • Live Stream"
         elif content_type == "community":
             color = 0x4A90E2
