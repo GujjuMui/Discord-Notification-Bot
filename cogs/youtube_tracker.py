@@ -399,7 +399,43 @@ class YouTubeTracker(commands.Cog):
         return items
 
     async def fetch_feed(self, channel_id: str) -> list[dict[str, Any]]:
-        return await self._fetch_playlist_feed(channel_id, channel_id, "video")
+        """Fetch the documented public Atom feed for a channel's uploads."""
+        xml = await self._fetch(
+            f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        )
+        parsed = feedparser.parse(xml)
+        items: list[dict[str, Any]] = []
+        for entry in parsed.entries:
+            video_id = str(getattr(entry, "yt_videoid", "") or "").strip()
+            if not video_id:
+                continue
+            thumbnails = getattr(entry, "media_thumbnail", None)
+            thumbnail_url = None
+            if thumbnails:
+                try:
+                    thumbnail_url = thumbnails[0].get("url")
+                except (IndexError, AttributeError, TypeError):
+                    pass
+            items.append({
+                "content_id": video_id,
+                "content_type": "video",
+                "video_id": video_id,
+                "channel_id": channel_id,
+                "channel_name": str(getattr(entry, "author", "") or "").strip(),
+                "title": str(getattr(entry, "title", "Untitled")),
+                "video_url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail_url": thumbnail_url,
+                "published_at": str(getattr(entry, "published", "") or "") or None,
+                "description": str(getattr(entry, "summary", "") or "")[:1500],
+                "duration": None,
+                "status": None,
+                "scheduled_start": None,
+                "post_text": None,
+                "post_images": [],
+                "is_short": False,
+                "is_live": False,
+            })
+        return items
 
     async def _enrich_live_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for item in items[:8]:
@@ -517,7 +553,11 @@ class YouTubeTracker(commands.Cog):
             logger.warning("Could not fetch YouTube community surface for %s", channel_id)
 
         if not activity:
-            activity = await self.fetch_feed(channel_id)
+            try:
+                activity = await self.fetch_feed(channel_id)
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+                logger.warning("Could not fetch documented YouTube video feed for %s", channel_id)
+                activity = []
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         for item in activity:
             key = (item["content_id"], item["content_type"])
