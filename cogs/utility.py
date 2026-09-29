@@ -103,8 +103,7 @@ class Utility(commands.Cog):
             content = f"{ping_text} {content}".strip()
 
         if media_url and not embed_enabled:
-            content = f"{content}
-{media_url}".strip()
+            content = f"{content}\n{media_url}".strip()
 
         if not embed_enabled and not content and not attachment:
             raise ValueError("Provide message text, media_url, or an attachment.")
