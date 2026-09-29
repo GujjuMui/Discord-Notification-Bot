@@ -17,6 +17,7 @@ import config
 from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
 from cogs.utility import Utility
+from utils.helpers import format_mentions
 
 LOG_DIR = config.PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,7 +55,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "2.2.0"
+BOT_VERSION = "2.3.0"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
@@ -67,14 +68,24 @@ intents.voice_states = True
 intents.invites = True
 intents.emojis_and_stickers = True
 
+allowed_mentions = discord.AllowedMentions(
+    everyone=True,
+    roles=True,
+    users=True,
+    replied_user=True,
+)
+
 bot = commands.Bot(
     command_prefix=config.BOT_PREFIX,
     intents=intents,
     help_command=None,
+    allowed_mentions=allowed_mentions,
 )
 
 # Exposed to public/about and private health dashboards without importing main from cogs.
 bot.bot_started_at = START_TIME
+bot.allowed_mentions = allowed_mentions
+bot.format_mentions = format_mentions
 
 tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
