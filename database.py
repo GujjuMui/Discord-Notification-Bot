@@ -221,6 +221,7 @@ class Database:
                         yt_channel_url TEXT NOT NULL,
                         discord_target_channel_id TEXT NOT NULL,
                         ping_role_id TEXT,
+                        content_types TEXT NOT NULL DEFAULT 'all',
                         last_video_id TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(guild_id, yt_channel_id, discord_target_channel_id)
