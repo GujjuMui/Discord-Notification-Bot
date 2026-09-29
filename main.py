@@ -16,6 +16,7 @@ from discord.ext import commands
 import config
 from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
+from cogs.utility import Utility
 
 LOG_DIR = config.PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,6 +107,10 @@ async def setup_bot() -> None:
 
     server_logger = ServerLogger(bot)
     await bot.add_cog(server_logger)
+    bot.server_logger = server_logger
+
+    utility = Utility(bot)
+    await bot.add_cog(utility)
 
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")
@@ -216,7 +221,7 @@ async def on_ready() -> None:
 
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
-    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger")
+    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger, Utility")
     logger.info("Database tables synchronized: %s", table_counts)
     if server_logger:
         logger.info("Categorized server logging is loaded.")
