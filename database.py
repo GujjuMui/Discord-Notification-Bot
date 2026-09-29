@@ -262,9 +262,25 @@ class Database:
                     UNIQUE(guild_id, yt_channel_id, content_id, content_type)
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS yt_content_route_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT NOT NULL,
+                    yt_channel_id TEXT NOT NULL,
+                    discord_target_channel_id TEXT NOT NULL,
+                    content_id TEXT NOT NULL,
+                    content_type TEXT NOT NULL CHECK(content_type IN ('video','short','live','community')),
+                    notified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, yt_channel_id, discord_target_channel_id, content_id, content_type)
+                )
+            """)
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_yt_content_cache_route "
                 "ON yt_content_cache(guild_id, yt_channel_id, content_type)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_yt_content_route_cache "
+                "ON yt_content_route_cache(guild_id, yt_channel_id, discord_target_channel_id)"
             )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_yt_monitored_route "
@@ -517,19 +533,44 @@ class Database:
             return dict(row) if row else None
 
     def has_yt_content_been_notified(
-        self, guild_id: int, yt_channel_id: str, content_id: str, content_type: str
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        content_id: str,
+        content_type: str,
+        discord_target_channel_id: Optional[int] = None,
     ) -> bool:
         with self._cursor() as cursor:
-            row = cursor.execute("""
-                SELECT 1 FROM yt_content_cache
-                WHERE guild_id = ? AND yt_channel_id = ?
-                  AND content_id = ? AND content_type = ?
-                LIMIT 1
-            """, (str(guild_id), yt_channel_id, content_id, content_type)).fetchone()
+            if discord_target_channel_id is None:
+                row = cursor.execute("""
+                    SELECT 1 FROM yt_content_cache
+                    WHERE guild_id = ? AND yt_channel_id = ?
+                      AND content_id = ? AND content_type = ?
+                    LIMIT 1
+                """, (str(guild_id), yt_channel_id, content_id, content_type)).fetchone()
+            else:
+                row = cursor.execute("""
+                    SELECT 1 FROM yt_content_route_cache
+                    WHERE guild_id = ? AND yt_channel_id = ?
+                      AND discord_target_channel_id = ?
+                      AND content_id = ? AND content_type = ?
+                    LIMIT 1
+                """, (
+                    str(guild_id),
+                    yt_channel_id,
+                    str(discord_target_channel_id),
+                    content_id,
+                    content_type,
+                )).fetchone()
             return row is not None
 
     def mark_yt_content_notified(
-        self, guild_id: int, yt_channel_id: str, content_id: str, content_type: str
+        self,
+        guild_id: int,
+        yt_channel_id: str,
+        content_id: str,
+        content_type: str,
+        discord_target_channel_id: Optional[int] = None,
     ) -> bool:
         with self._cursor() as cursor:
             cursor.execute("""
@@ -537,6 +578,19 @@ class Database:
                     (guild_id, yt_channel_id, content_id, content_type)
                 VALUES (?, ?, ?, ?)
             """, (str(guild_id), yt_channel_id, content_id, content_type))
+            if discord_target_channel_id is None:
+                return cursor.rowcount > 0
+            cursor.execute("""
+                INSERT OR IGNORE INTO yt_content_route_cache
+                    (guild_id, yt_channel_id, discord_target_channel_id, content_id, content_type)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                str(guild_id),
+                yt_channel_id,
+                str(discord_target_channel_id),
+                content_id,
+                content_type,
+            ))
             return cursor.rowcount > 0
 
     def update_yt_last_video(
@@ -683,6 +737,7 @@ class Database:
             "guild_log_channels",
             "yt_monitored_channels",
             "yt_content_cache",
+            "yt_content_route_cache",
             "message_cache",
         )
         counts: Dict[str, int] = {}
