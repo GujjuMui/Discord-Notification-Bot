@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -176,19 +177,14 @@ class YouTubeTracker(commands.Cog):
         async with self._poll_lock:
             monitored_channels = db.get_yt_monitored_channels()
             grouped: dict[str, list[dict[str, Any]]] = {}
-
             for monitored in monitored_channels:
                 grouped.setdefault(monitored["yt_channel_id"], []).append(monitored)
-
             for yt_channel_id, subscriptions in grouped.items():
                 try:
-                    videos = await self.fetch_feed(yt_channel_id)
-                    await self._dispatch_feed(yt_channel_id, videos, subscriptions)
+                    activity = await self.fetch_channel_activity(yt_channel_id)
+                    await self._dispatch_activity(yt_channel_id, activity, subscriptions)
                 except Exception:
-                    logger.exception(
-                        "Failed to process YouTube channel %s",
-                        yt_channel_id,
-                    )
+                    logger.exception("Failed to process YouTube activity for channel %s", yt_channel_id)
 
     @poll_loop.before_loop
     async def before_poll_loop(self) -> None:
