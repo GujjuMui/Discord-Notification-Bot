@@ -780,6 +780,7 @@ class Database:
             "yt_monitored_channels",
             "yt_content_cache",
             "yt_content_route_cache",
+            "say_messages",
             "message_cache",
         )
         counts: Dict[str, int] = {}
