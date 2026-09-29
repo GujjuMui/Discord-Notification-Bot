@@ -519,63 +519,6 @@ class YouTubeTracker(commands.Cog):
                         merged[key][field] = item[field]
         return list(merged.values())
 
-    async def _prime_subscription(
-        self,
-        guild_id: int,
-        yt_channel_id: str,
-        subscription: dict[str, Any],
-        activity: list[dict[str, Any]],
-    ) -> None:
-        enabled = self._normalize_content_types(subscription.get("content_types"))
-        for item in activity:
-            if item["content_type"] in enabled:
-                db.mark_yt_content_notified(
-                    guild_id,
-                    yt_channel_id,
-                    item["content_id"],
-                    item["content_type"],
-                )
-
-    async def _prime_subscription(
-        self,
-        guild_id: int,
-        yt_channel_id: str,
-        discord_target_channel_id: int,
-        videos: list[dict[str, Any]],
-    ) -> int:
-        """Seed a subscription's current feed and advance its cursor."""
-        if videos:
-            db.update_yt_last_video(
-                guild_id,
-                yt_channel_id,
-                discord_target_channel_id,
-                videos[0]["video_id"],
-            )
-
-        # The subscription cursor is sufficient to prevent current RSS entries
-        # from being announced, so we do not need to write every historical
-        # entry into the legacy videos table.
-        return len(videos)
-
-    @staticmethod
-    def _new_videos_for_subscription(
-        videos: list[dict[str, Any]],
-        last_video_id: Optional[str],
-    ) -> list[dict[str, Any]]:
-        if not videos or not last_video_id:
-            return []
-
-        oldest_first = list(reversed(videos))
-        try:
-            cursor_index = next(
-                i for i, video in enumerate(oldest_first)
-                if video["video_id"] == last_video_id
-            )
-        except StopIteration:
-            return []
-
-        return oldest_first[cursor_index + 1:]
-
     @staticmethod
     def _normalize_content_types(value: Optional[str]) -> set[str]:
         raw = str(value or "all").strip().lower()
@@ -629,6 +572,7 @@ class YouTubeTracker(commands.Cog):
                     yt_channel_id,
                     content_id,
                     content_type,
+                    target_id,
                 ):
                     continue
                 if not item.get("channel_name"):
