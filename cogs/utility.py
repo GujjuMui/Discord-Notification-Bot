@@ -102,8 +102,13 @@ class Utility(commands.Cog):
         message = format_mentions(message or "", interaction.guild)
         ping_text, allowed_mentions = _resolve_ping(interaction.guild, ping_role)
         content = message or ""
-        if target_user:
-            content = f"{target_user.mention} {content}".strip()
+
+        # Build the direct-user mention explicitly from the Discord ID. This
+        # avoids relying on cached member formatting and makes the mention
+        # target unambiguous to Discord's mention parser.
+        direct_user_mention = f"<@{target_user.id}>" if target_user else ""
+        if direct_user_mention:
+            content = f"{direct_user_mention} {content}".strip()
         if ping_text:
             content = f"{ping_text} {content}".strip()
 
@@ -111,7 +116,7 @@ class Utility(commands.Cog):
         allowed_mentions = discord.AllowedMentions(
             everyone=mention_everyone,
             roles=bool(mention_roles) or bool(ping_role),
-            users=bool(mention_users) or bool(target_user),
+            users=True if mention_users or target_user else False,
             replied_user=True,
         )
 
