@@ -464,6 +464,31 @@ class ServerLogger(commands.Cog):
             return False
 
 
+    async def log_say_event(
+        self,
+        guild_id: int,
+        executor: discord.abc.User,
+        target_channel_id: int,
+        message_preview: str,
+        has_media: bool,
+    ) -> bool:
+        """Write a compact /say execution record to moderation logs."""
+        preview = str(message_preview or "(no text)")[:300]
+        target = f"<#{target_channel_id}>"
+        return await self._send(
+            guild_id,
+            "mod",
+            "📢 /say Executed",
+            "",
+            discord.Color.blurple(),
+            [
+                ("Executor", f"{executor.mention} ({executor.id})", True),
+                ("Channel", target, True),
+                ("Message Preview", preview, False),
+                ("Media/Attachment", "Yes" if has_media else "No", True),
+            ],
+        )
+
     async def _executor(
         self,
         guild: Optional[discord.Guild],
