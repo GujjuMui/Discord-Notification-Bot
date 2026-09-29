@@ -249,43 +249,58 @@ class YouTubeTracker(commands.Cog):
 
     @staticmethod
     def _extract_initial_data(html: str) -> Optional[dict[str, Any]]:
-        markers = ('var ytInitialData = ', 'window["ytInitialData"] = ', "window['ytInitialData'] = ")
-        start = -1
-        for marker in markers:
-            start = html.find(marker)
-            if start >= 0:
-                start += len(marker)
-                break
-        if start < 0:
-            return None
-        while start < len(html) and html[start].isspace():
-            start += 1
-        if start >= len(html) or html[start] != "{":
-            return None
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(html)):
-            char = html[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
+        """Extract YouTube's ytInitialData JSON using current and legacy payload forms."""
+        starts: list[int] = []
+        for marker in (
+            "var ytInitialData = ",
+            'window["ytInitialData"] = ',
+            "window['ytInitialData'] = ",
+            "ytInitialData = ",
+        ):
+            position = html.find(marker)
+            if position >= 0:
+                starts.append(position + len(marker))
+
+        script_match = re.search(
+            r'<script[^>]+id=["\\\']ytInitialData["\\\'][^>]*>(.*?)</script>',
+            html,
+            re.I | re.S,
+        )
+        if script_match:
+            starts.insert(0, script_match.start(1))
+
+        for start in starts:
+            while start < len(html) and html[start].isspace():
+                start += 1
+            if start >= len(html) or html[start] != "{":
                 continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(html[start:index + 1])
-                    except json.JSONDecodeError:
-                        return None
+
+            depth = 0
+            in_string = False
+            escaped = False
+            for index in range(start, len(html)):
+                char = html[index]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                    continue
+                if char == '"':
+                    in_string = True
+                elif char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            parsed = json.loads(html[start:index + 1])
+                            if isinstance(parsed, dict):
+                                return parsed
+                        except json.JSONDecodeError:
+                            break
         return None
 
     @classmethod
@@ -447,11 +462,14 @@ class YouTubeTracker(commands.Cog):
         return items
 
     async def fetch_feed(self, channel_id: str) -> list[dict[str, Any]]:
-        """Fetch the documented public Atom feed for a channel's uploads."""
+        """Fetch and parse the documented public Atom feed for a channel's uploads."""
         xml = await self._fetch(
             f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         )
         parsed = feedparser.parse(xml)
+        if getattr(parsed, "bozo", False) and not parsed.entries:
+            reason = str(getattr(parsed, "bozo_exception", "unknown Atom parse error"))
+            raise RuntimeError(f"RSS parse error: {reason}")
         items: list[dict[str, Any]] = []
         for entry in parsed.entries:
             video_id = str(getattr(entry, "yt_videoid", "") or "").strip()
@@ -569,38 +587,78 @@ class YouTubeTracker(commands.Cog):
         return list(items.values())
 
     async def fetch_channel_activity(self, channel_id: str) -> list[dict[str, Any]]:
-        activity: list[dict[str, Any]] = []
-        try:
-            activity.extend(await self.fetch_feed(channel_id))
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-            logger.warning("Could not fetch documented YouTube video feed for %s", channel_id)
+        """Collect independent YouTube sources without letting one failure erase another."""
+        source_items: dict[str, list[dict[str, Any]]] = {
+            "rss": [], "shorts": [], "live": [], "community": []
+        }
 
         try:
-            shorts_html = await self._fetch(
-                f"https://www.youtube.com/channel/{channel_id}/shorts"
-            )
-            activity.extend(self._short_items_from_page(shorts_html, channel_id))
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-            logger.warning("Could not fetch YouTube Shorts page for %s", channel_id)
+            source_items["rss"] = await self.fetch_feed(channel_id)
+        except aiohttp.ClientResponseError as exc:
+            logger.error("[YouTube Poller] RSS feed HTTP %s for %s", exc.status, channel_id)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.error("[YouTube Poller] RSS feed request failed for %s: %s", channel_id, exc)
+        except RuntimeError as exc:
+            logger.error("[YouTube Poller] RSS feed parse failed for %s: %s", channel_id, exc)
+        except Exception as exc:
+            logger.exception("[YouTube Poller] Unexpected RSS failure for %s: %s", channel_id, exc)
 
-        try:
-            live_html = await self._fetch(
-                f"https://www.youtube.com/channel/{channel_id}/live"
-            )
-            activity.extend(self._live_items_from_page(live_html, channel_id))
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-            logger.warning("Could not fetch YouTube live page for %s", channel_id)
+        async def scrape_pages(source: str, urls: tuple[str, ...], parser) -> None:
+            for url in urls:
+                try:
+                    html = await self._fetch(url)
+                    parsed = parser(html, channel_id)
+                    if parsed:
+                        source_items[source] = parsed
+                        return
+                    logger.debug(
+                        "[YouTube Poller] %s parser returned 0 items for %s (%s)",
+                        source.capitalize(), channel_id, url,
+                    )
+                except aiohttp.ClientResponseError as exc:
+                    logger.warning(
+                        "[YouTube Poller] %s HTML HTTP %s for %s",
+                        source.capitalize(), exc.status, channel_id,
+                    )
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    logger.warning(
+                        "[YouTube Poller] %s HTML request failed for %s: %s",
+                        source.capitalize(), channel_id, exc,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "[YouTube Poller] %s parser failed for %s: %s",
+                        source.capitalize(), channel_id, exc,
+                    )
 
-        try:
-            html = await self._fetch(
-                f"https://www.youtube.com/channel/{channel_id}/community"
-            )
-            activity.extend(self._community_items_from_page(html, channel_id))
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
-            logger.warning("Could not fetch YouTube community surface for %s", channel_id)
+        await scrape_pages(
+            "shorts",
+            (f"https://www.youtube.com/channel/{channel_id}/shorts",
+             f"https://www.youtube.com/channel/{channel_id}/shorts?view=0"),
+            self._short_items_from_page,
+        )
+        await scrape_pages(
+            "live",
+            (f"https://www.youtube.com/channel/{channel_id}/live",
+             f"https://www.youtube.com/channel/{channel_id}/streams"),
+            self._live_items_from_page,
+        )
+        await scrape_pages(
+            "community",
+            (f"https://www.youtube.com/channel/{channel_id}/community",),
+            self._community_items_from_page,
+        )
 
-        if not activity:
-            activity = []
+        activity = (
+            source_items["rss"] + source_items["shorts"] +
+            source_items["live"] + source_items["community"]
+        )
+        logger.info(
+            "[YouTube Poller] Scan for %s: RSS Videos: %d | Shorts: %d | Live: %d | Community: %d | Total: %d",
+            channel_id, len(source_items["rss"]), len(source_items["shorts"]),
+            len(source_items["live"]), len(source_items["community"]), len(activity),
+        )
+
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         for item in activity:
             key = (item["content_id"], item["content_type"])
@@ -608,12 +666,8 @@ class YouTubeTracker(commands.Cog):
                 merged[key] = item
             else:
                 for field in (
-                    "thumbnail_url",
-                    "published_at",
-                    "duration",
-                    "status",
-                    "scheduled_start",
-                    "description",
+                    "thumbnail_url", "published_at", "duration", "status",
+                    "scheduled_start", "description",
                 ):
                     if item.get(field):
                         merged[key][field] = item[field]
@@ -1000,6 +1054,28 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     bot.tree.add_command(trust_group)
+    @bot.tree.command(name="sync", description="Sync the global slash command tree immediately.")
+    @is_trusted_or_owner()
+    async def sync_commands(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            synced = await bot.tree.sync()
+            logger.info(
+                "Manual slash command sync by %s: synced %d global command(s): %s",
+                interaction.user, len(synced),
+                ", ".join(f"/{command.name}" for command in synced),
+            )
+            await interaction.followup.send(
+                f"✅ Synced **{len(synced)}** global slash command(s).",
+                ephemeral=True,
+            )
+        except discord.HTTPException as exc:
+            logger.exception("Manual slash command sync failed.")
+            await interaction.followup.send(
+                f"❌ Discord rejected the command sync (HTTP {exc.status}). Try again later.",
+                ephemeral=True,
+            )
+
     @bot.tree.command(name="about", description="Learn about the bot and view live public statistics.")
     async def about(interaction: discord.Interaction) -> None:
         started_at = getattr(interaction.client, "bot_started_at", None)
