@@ -586,6 +586,7 @@ class YouTubeTracker(commands.Cog):
                         yt_channel_id,
                         content_id,
                         content_type,
+                        target_id,
                     )
                     if content_type in {"video", "short"}:
                         db.add_video(
@@ -784,14 +785,12 @@ class YouTubeTracker(commands.Cog):
         url: str,
         discord_target_channel_id: int,
         ping_role_id: Optional[int] = None,
+        content_types: str = "all",
     ) -> dict[str, Any]:
         channel_id = await self.resolve_channel_id(url)
-        videos = await self.fetch_feed(channel_id)
-        if not videos:
-            raise ValueError("The channel RSS feed is empty or unavailable.")
-
+        activity = await self.fetch_channel_activity(channel_id)
         channel_name = next(
-            (v["channel_name"] for v in videos if v["channel_name"]),
+            (item["channel_name"] for item in activity if item.get("channel_name")),
             channel_id,
         )
         existing = db.get_yt_monitored_channel(
@@ -807,24 +806,37 @@ class YouTubeTracker(commands.Cog):
             yt_channel_url=f"https://www.youtube.com/channel/{channel_id}",
             discord_target_channel_id=discord_target_channel_id,
             ping_role_id=ping_role_id,
+            content_types=content_types,
             last_video_id=existing.get("last_video_id") if existing else None,
         )
 
-        if not existing:
-            await self._prime_subscription(
-                guild_id,
-                channel_id,
-                discord_target_channel_id,
-                videos,
-            )
+        subscription = db.get_yt_monitored_channel(
+            guild_id,
+            channel_id,
+            discord_target_channel_id,
+        )
+        if not existing and subscription:
+            enabled = self._normalize_content_types(content_types)
+            for item in activity:
+                if item["content_type"] in enabled:
+                    db.mark_yt_content_notified(
+                        guild_id,
+                        channel_id,
+                        item["content_id"],
+                        item["content_type"],
+                        discord_target_channel_id,
+                    )
 
         return {
             "channel_id": channel_id,
             "channel_name": channel_name,
-            "video_count": len(videos),
+            "video_count": len(
+                [item for item in activity if item["content_type"] in {"video", "short", "live"}]
+            ),
             "already_tracked": existing is not None,
             "discord_target_channel_id": discord_target_channel_id,
             "ping_role_id": ping_role_id,
+            "content_types": content_types,
             "channel_url": f"https://www.youtube.com/channel/{channel_id}",
         }
 
