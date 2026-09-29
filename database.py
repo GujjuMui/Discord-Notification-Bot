@@ -122,6 +122,7 @@ class Database:
                     yt_channel_url TEXT NOT NULL,
                     discord_target_channel_id TEXT NOT NULL,
                     ping_role_id TEXT,
+                    ping_user_ids TEXT NOT NULL DEFAULT '[]',
                     content_types TEXT NOT NULL DEFAULT 'all',
                     last_video_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -206,6 +207,12 @@ class Database:
                 )
                 yt_columns.add("ping_role_id")
 
+            if "ping_user_ids" not in yt_columns:
+                cursor.execute(
+                    "ALTER TABLE yt_monitored_channels ADD COLUMN ping_user_ids TEXT NOT NULL DEFAULT '[]'"
+                )
+                yt_columns.add("ping_user_ids")
+
             if "content_types" not in yt_columns:
                 cursor.execute(
                     "ALTER TABLE yt_monitored_channels ADD COLUMN content_types TEXT NOT NULL DEFAULT 'all'"
@@ -232,6 +239,7 @@ class Database:
                         yt_channel_url TEXT NOT NULL,
                         discord_target_channel_id TEXT NOT NULL,
                         ping_role_id TEXT,
+                        ping_user_ids TEXT NOT NULL DEFAULT '[]',
                         content_types TEXT NOT NULL DEFAULT 'all',
                         last_video_id TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -241,13 +249,15 @@ class Database:
                 cursor.execute("""
                     INSERT OR IGNORE INTO yt_monitored_channels
                         (guild_id, yt_channel_id, yt_channel_name, yt_channel_url,
-                         discord_target_channel_id, content_types, last_video_id, created_at)
+                         discord_target_channel_id, ping_role_id, ping_user_ids, content_types, last_video_id, created_at)
                     SELECT
                         legacy.guild_id,
                         legacy.yt_channel_id,
                         legacy.yt_channel_name,
                         legacy.yt_channel_url,
                         COALESCE(CAST(gs.yt_notification_channel_id AS TEXT), '0'),
+                        legacy.ping_role_id,
+                        COALESCE(legacy.ping_user_ids, '[]'),
                         COALESCE(legacy.content_types, 'all'),
                         legacy.last_video_id,
                         legacy.created_at
@@ -432,6 +442,7 @@ class Database:
         yt_channel_url: str,
         discord_target_channel_id: int,
         ping_role_id: Optional[int] = None,
+        ping_user_ids: Optional[List[int]] = None,
         content_types: str = "all",
         last_video_id: Optional[str] = None,
     ) -> bool:
@@ -439,13 +450,14 @@ class Database:
             cursor.execute("""
                 INSERT INTO yt_monitored_channels
                     (guild_id, yt_channel_id, yt_channel_name, yt_channel_url,
-                     discord_target_channel_id, ping_role_id, content_types, last_video_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     discord_target_channel_id, ping_role_id, ping_user_ids, content_types, last_video_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(guild_id, yt_channel_id, discord_target_channel_id)
                 DO UPDATE SET
                     yt_channel_name = excluded.yt_channel_name,
                     yt_channel_url = excluded.yt_channel_url,
                     ping_role_id = excluded.ping_role_id,
+                    ping_user_ids = excluded.ping_user_ids,
                     content_types = excluded.content_types,
                     last_video_id = COALESCE(
                         yt_monitored_channels.last_video_id,
@@ -458,6 +470,7 @@ class Database:
                 yt_channel_url,
                 str(discord_target_channel_id),
                 str(ping_role_id) if ping_role_id else None,
+                json.dumps([int(value) for value in (ping_user_ids or [])]),
                 content_types or "all",
                 last_video_id,
             ))
@@ -496,7 +509,7 @@ class Database:
                 rows = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
                            yt_channel_url, discord_target_channel_id, ping_role_id,
-                           content_types, last_video_id, created_at
+                           ping_user_ids, content_types, last_video_id, created_at
                     FROM yt_monitored_channels
                     ORDER BY guild_id, yt_channel_name, discord_target_channel_id
                 """).fetchall()
@@ -543,6 +556,14 @@ class Database:
                     str(discord_target_channel_id),
                 )).fetchone()
             return dict(row) if row else None
+
+    @staticmethod
+    def decode_yt_ping_users(value: Any) -> List[int]:
+        try:
+            data = json.loads(value or "[]") if isinstance(value, str) else (value or [])
+            return [int(item) for item in data]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
 
     def has_yt_content_been_notified(
         self,
