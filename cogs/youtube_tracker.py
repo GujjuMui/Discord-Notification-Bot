@@ -270,9 +270,17 @@ class YouTubeTracker(commands.Cog):
 
     @classmethod
     def _thumbnail_url(cls, item: dict[str, Any]) -> Optional[str]:
-        """Use the supplied thumbnail, falling back to YouTube high-res images."""
-        thumbnail = cls._clean_url(item.get("thumbnail_url"))
+        """Prefer high-resolution YouTube thumbnails for Shorts and live streams."""
         video_id = cls._text(item.get("video_id") or item.get("content_id"))
+        content_type = cls._text(item.get("content_type")).lower()
+        thumbnail = cls._clean_url(item.get("thumbnail_url"))
+
+        if video_id and content_type in {"short", "live"}:
+            # YouTube may return a low-resolution page thumbnail. Prefer the
+            # standard high-resolution video image and let Discord fall back
+            # naturally if that asset is unavailable.
+            return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+
         if thumbnail:
             return thumbnail
         if video_id:
