@@ -1071,6 +1071,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         url="YouTube channel URL or @handle URL",
         target_channel="Discord channel where notifications for this YouTube source will be posted",
         role="Optional role to ping for matching activity",
+        target_user="Optional user to ping for matching activity",
         types="Content types: all, videos, shorts, live, or community",
     )
     @app_commands.choices(
@@ -1087,6 +1088,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         url: str,
         target_channel: discord.TextChannel,
         role: Optional[discord.Role] = None,
+        target_user: Optional[discord.Member] = None,
         types: Optional[app_commands.Choice[str]] = None,
     ) -> None:
         if not interaction.guild:
@@ -1104,6 +1106,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 url,
                 target_channel.id,
                 role.id if role else None,
+                [target_user.id] if target_user else [],
                 selected_types,
             )
             if result["already_tracked"]:
