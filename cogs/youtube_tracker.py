@@ -270,23 +270,59 @@ class YouTubeTracker(commands.Cog):
         return match.group(0).rstrip('.,)<>\\"\'') if match else None
 
     @classmethod
-    def _thumbnail_url(cls, item: dict[str, Any]) -> Optional[str]:
-        """Prefer high-resolution YouTube thumbnails for Shorts and live streams."""
-        video_id = cls._text(item.get("video_id") or item.get("content_id"))
-        content_type = cls._text(item.get("content_type")).lower()
-        thumbnail = cls._clean_url(item.get("thumbnail_url"))
+    def _is_direct_image_url(cls, value: Any) -> Optional[str]:
+        """Return only a direct JPG/PNG URL, never a raw scraper payload."""
+        url = cls._clean_url(value)
+        if not url:
+            return None
+        path = urlparse(url).path.lower()
+        if not (path.endswith(".jpg") or path.endswith(".jpeg") or path.endswith(".png")):
+            return None
+        return url
 
-        if video_id and content_type in {"short", "live"}:
-            # YouTube may return a low-resolution page thumbnail. Prefer the
-            # standard high-resolution video image and let Discord fall back
-            # naturally if that asset is unavailable.
-            return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+    async def get_valid_yt_thumbnail(self, video_id: str) -> Optional[str]:
+        """Return a working YouTube thumbnail, falling back from HD to HQ."""
+        video_id = self._text(video_id)
+        if not video_id:
+            return None
 
-        if thumbnail:
-            return thumbnail
-        if video_id:
-            return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+        candidates = (
+            f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+            f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+        )
+
+        if not self.session or self.session.closed:
+            return candidates[1]
+
+        for candidate in candidates:
+            try:
+                async with self.session.get(
+                    candidate,
+                    allow_redirects=True,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    content_type = (response.headers.get("Content-Type") or "").lower()
+                    if response.status == 200 and (
+                        content_type.startswith("image/")
+                        or candidate.lower().endswith((".jpg", ".jpeg", ".png"))
+                    ):
+                        return candidate
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                continue
+
         return None
+
+    async def _thumbnail_url(self, item: dict[str, Any]) -> Optional[str]:
+        """Resolve a safe, working thumbnail for a YouTube activity item."""
+        video_id = self._text(item.get("video_id") or item.get("content_id"))
+        if video_id:
+            thumbnail = await self.get_valid_yt_thumbnail(video_id)
+            if thumbnail:
+                return thumbnail
+
+        # Community posts and other non-video content may only expose a direct
+        # image URL from the scraper. Reject small/icon/raw dictionary values.
+        return self._is_direct_image_url(item.get("thumbnail_url"))
 
     @classmethod
     def _channel_name_from_html(cls, html: str) -> Optional[str]:
@@ -893,7 +929,7 @@ class YouTubeTracker(commands.Cog):
             url = f"https://www.youtube.com/shorts/{video_id}" if content_type == "short" else f"https://www.youtube.com/watch?v={video_id}"
         url = url or "https://www.youtube.com/"
 
-        thumbnail_url = self._thumbnail_url(item)
+        thumbnail_url = await self._thumbnail_url(item)
         upload_time = self._parse_datetime(self._text(item.get("published_at"))) or datetime.now(timezone.utc)
 
         if content_type == "short":
@@ -923,7 +959,7 @@ class YouTubeTracker(commands.Cog):
         )
         embed.set_author(
             name="YouTube",
-            icon_url="https://www.youtube.com/s/desktop/fe7f2f5e/img/favicon_144x144.png",
+            icon_url="https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/1024px-YouTube_full-color_icon_%282017%29.svg.png",
         )
         if thumbnail_url:
             embed.set_image(url=thumbnail_url)
@@ -950,7 +986,7 @@ class YouTubeTracker(commands.Cog):
 
         embed.set_footer(
             text=footer,
-            icon_url="https://www.youtube.com/s/desktop/fe7f2f5e/img/favicon_144x144.png",
+            icon_url="https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/1024px-YouTube_full-color_icon_%282017%29.svg.png",
         )
 
         # Keep the URL out of Discord's automatic preview in the header while
@@ -1557,6 +1593,8 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
             return
 
+        await interaction.response.defer(ephemeral=True)
+
         embed = discord.Embed(
             title="[TEST PREVIEW] 🎥 MrBeast uploaded a new video!",
             description="A realistic preview of the YouTube upload notification.",
@@ -1599,9 +1637,15 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 replied_user=True,
             ),
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Test notification sent to {target_channel.mention}"
-            + (f" with {role.mention} ping." if role else "."),
+            + (
+                " with @everyone ping."
+                if role and role.is_default()
+                else f" with {role.mention} ping."
+                if role
+                else "."
+            ),
             ephemeral=True,
         )
 
