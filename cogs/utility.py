@@ -249,6 +249,8 @@ class Utility(commands.Cog):
             await interaction.followup.send("✅ Announcement sent.", ephemeral=True)
         except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
             await self._error(interaction, str(exc))
+        except Exception as exc:
+            await self._error(interaction, f"Unexpected error while sending the announcement: {exc}")
 
     @app_commands.command(name="say_embed", description="Create a rich multi-field announcement embed.")
     @is_trusted_or_owner()
@@ -300,6 +302,8 @@ class Utility(commands.Cog):
             await interaction.followup.send("✅ Embed announcement sent.", ephemeral=True)
         except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
             await self._error(interaction, str(exc))
+        except Exception as exc:
+            await self._error(interaction, f"Unexpected error while sending the embed announcement: {exc}")
 
     @app_commands.command(name="edit_say", description="Edit a message previously sent by /say or /say_embed.")
     @is_trusted_or_owner()
