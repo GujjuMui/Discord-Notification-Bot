@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import logging
 import re
@@ -286,6 +287,56 @@ class YouTubeTracker(commands.Cog):
         if video_id:
             return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
         return None
+
+    @classmethod
+    def _channel_name_from_html(cls, html: str) -> Optional[str]:
+        """Extract the public YouTube channel display name from a channel page."""
+        patterns = (
+            r'<meta[^>]+itemprop=["\\']name["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+            r'<meta[^>]+property=["\\']og:title["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+            r'<meta[^>]+name=["\\']title["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+        )
+        for pattern in patterns:
+            match = re.search(pattern, html, re.I)
+            if not match:
+                continue
+            name = html_lib.unescape(match.group(1)).strip()
+            name = re.sub(r"\\s+", " ", name).strip()
+            if name:
+                if name.lower().endswith(" - youtube"):
+                    name = name[:-10].strip()
+                if name and not CHANNEL_ID_RE.fullmatch(name):
+                    return name[:100]
+
+        data = cls._extract_initial_data(html)
+        if data:
+            for node in cls._walk_json(data):
+                for key in ("channelMetadataRenderer", "pageHeaderViewModel"):
+                    payload = node.get(key) if isinstance(node, dict) else None
+                    if not isinstance(payload, dict):
+                        continue
+                    title = cls._text(
+                        payload.get("title")
+                        or payload.get("channelName")
+                        or payload.get("pageTitle")
+                    )
+                    if title and not CHANNEL_ID_RE.fullmatch(title):
+                        return title[:100]
+        return None
+
+    async def fetch_channel_name(self, channel_id: str) -> Optional[str]:
+        """Fetch the public display name for a YouTube channel ID."""
+        try:
+            html = await self._fetch(
+                f"https://www.youtube.com/channel/{channel_id}"
+            )
+            return self._channel_name_from_html(html)
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+            logger.warning(
+                "Could not fetch the YouTube channel name for %s",
+                channel_id,
+            )
+            return None
 
     @staticmethod
     def _walk_json(value: Any):
@@ -906,11 +957,16 @@ class YouTubeTracker(commands.Cog):
         # the embed itself owns the visual thumbnail/card.
         ping_parts = [f"<@{user_id}>" for user_id in (ping_user_ids or [])]
         if ping_role_id:
-            # The guild ID is Discord's special @everyone role ID, so
-            # <@&guild_id> intentionally produces an @everyone mention.
-            ping_parts.append(f"<@&{ping_role_id}>")
-        header_message = f"New video from **{channel_name}**! Watch here: <{url}>"
-        content = " ".join([header_message, *ping_parts]).strip()
+            # Discord's special @everyone role must be sent as the literal
+            # @everyone token for an actual server-wide notification. Sending
+            # <@&guild_id> only renders the role mention visually.
+            if guild_id is not None and ping_role_id == guild_id:
+                ping_parts.append("@everyone")
+            else:
+                ping_parts.append(f"<@&{ping_role_id}>")
+        header_message = f"New video from **{channel_name}**!"
+        watch_line = f"Watch here: <{url}>"
+        content = "\n".join([header_message, watch_line, *ping_parts]).strip()
 
         try:
             await channel.send(
@@ -978,15 +1034,30 @@ class YouTubeTracker(commands.Cog):
         ping_role_id: Optional[int] = None,
         ping_user_ids: Optional[list[int]] = None,
         content_types: str = "all",
+        channel_name_override: Optional[str] = None,
     ) -> dict[str, Any]:
         # Discord represents @everyone using the guild ID. It is intentionally
         # supported here for server-wide YouTube notifications.
         channel_id = await self.resolve_channel_id(url)
         activity = await self.fetch_channel_activity(channel_id)
-        channel_name = next(
-            (item["channel_name"] for item in activity if item.get("channel_name")),
-            channel_id,
+
+        detected_name = next(
+            (
+                self._text(item.get("channel_name"))
+                for item in activity
+                if self._text(item.get("channel_name"))
+                and not CHANNEL_ID_RE.fullmatch(self._text(item.get("channel_name")))
+            ),
+            None,
         )
+        channel_name = self._text(channel_name_override) or detected_name
+        if not channel_name:
+            channel_name = await self.fetch_channel_name(channel_id)
+        if not channel_name:
+            raise ValueError(
+                "I could not detect the YouTube channel name. "
+                "Run /add_yt again and fill in the optional **channel_name** field."
+            )
         existing = db.get_yt_monitored_channel(
             guild_id,
             channel_id,
@@ -1250,6 +1321,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         role="Optional role to ping, including @everyone or @here.",
         target_user="Optional user to ping for matching activity",
         types="Content types: all, videos, shorts, live, or community",
+        channel_name="Optional display name if YouTube channel name cannot be detected automatically",
     )
     @app_commands.choices(
         types=[
@@ -1267,6 +1339,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         role: Optional[discord.Role] = None,
         target_user: Optional[discord.Member] = None,
         types: Optional[app_commands.Choice[str]] = None,
+        channel_name: Optional[str] = None,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
@@ -1285,6 +1358,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 role.id if role else None,
                 [target_user.id] if target_user else [],
                 selected_types,
+                channel_name_override=channel_name,
             )
             # @everyone is Discord's special default role. Its mention
             # formatting can render as "@@everyone" inside an embed on some
@@ -1510,7 +1584,9 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         if target_user:
             content_parts.append(target_user.mention)
         if role:
-            content_parts.append(role.mention)
+            content_parts.append(
+                "@everyone" if role.is_default() else role.mention
+            )
         content = " ".join(content_parts)
         await target_channel.send(
             content=content or None,
