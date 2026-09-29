@@ -535,7 +535,7 @@ class Database:
                 row = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
                            yt_channel_url, discord_target_channel_id, ping_role_id,
-                           content_types, last_video_id, created_at
+                           ping_user_ids, content_types, last_video_id, created_at
                     FROM yt_monitored_channels
                     WHERE guild_id = ? AND yt_channel_id = ?
                     ORDER BY id
