@@ -302,10 +302,7 @@ class YouTubeTracker(commands.Cog):
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     content_type = (response.headers.get("Content-Type") or "").lower()
-                    if response.status == 200 and (
-                        content_type.startswith("image/")
-                        or candidate.lower().endswith((".jpg", ".jpeg", ".png"))
-                    ):
+                    if response.status == 200 and content_type.startswith("image/"):
                         return candidate
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 continue
@@ -1625,17 +1622,25 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 "@everyone" if role.is_default() else role.mention
             )
         content = " ".join(content_parts)
-        await target_channel.send(
-            content=content or None,
-            embed=embed,
-            view=view,
-            allowed_mentions=discord.AllowedMentions(
-                everyone=True,
-                roles=bool(role),
-                users=bool(target_user),
-                replied_user=True,
-            ),
-        )
+        try:
+            await target_channel.send(
+                content=content or None,
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=True,
+                    roles=bool(role),
+                    users=bool(target_user),
+                    replied_user=True,
+                ),
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            await interaction.followup.send(
+                f"❌ Could not send the test notification: {exc}",
+                ephemeral=True,
+            )
+            return
+
         await interaction.followup.send(
             f"✅ Test notification sent to {target_channel.mention}"
             + (
