@@ -1273,11 +1273,13 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     @app_commands.describe(
         target_channel="Discord channel where the test notification will be posted",
         role="Optional role to ping in the test notification",
+        target_user="Optional user to ping in the test notification",
     )
     async def test_yt(
         interaction: discord.Interaction,
         target_channel: discord.TextChannel,
         role: Optional[discord.Role] = None,
+        target_user: Optional[discord.Member] = None,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
@@ -1309,12 +1311,22 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
         )
 
-        content = f"{role.mention} " if role else ""
+        content_parts = []
+        if target_user:
+            content_parts.append(target_user.mention)
+        if role:
+            content_parts.append(role.mention)
+        content = " ".join(content_parts)
         await target_channel.send(
             content=content or None,
             embed=embed,
             view=view,
-            allowed_mentions=discord.AllowedMentions(roles=True),
+            allowed_mentions=discord.AllowedMentions(
+                everyone=True,
+                roles=bool(role),
+                users=bool(target_user),
+                replied_user=True,
+            ),
         )
         await interaction.response.send_message(
             f"✅ Test notification sent to {target_channel.mention}"
