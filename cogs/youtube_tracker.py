@@ -1586,14 +1586,13 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         role: Optional[discord.Role] = None,
         target_user: Optional[discord.Member] = None,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         if not interaction.guild:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This command can only be used inside a server.",
                 ephemeral=True,
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         embed = discord.Embed(
             title="[TEST PREVIEW] 🎥 MrBeast uploaded a new video!",
