@@ -257,7 +257,7 @@ class YouTubeTracker(commands.Cog):
 
         # Remove HTML markup/entities commonly present in Atom descriptions.
         text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\\s+", " ", text)
+        text = re.sub(r"\s+", " ", text)
         return text.strip()
 
     @classmethod
@@ -266,7 +266,7 @@ class YouTubeTracker(commands.Cog):
         text = cls._text(value)
         if not text:
             return None
-        match = re.search(r"https?://\\S+", text)
+        match = re.search(r"https?://\S+", text)
         return match.group(0).rstrip('.,)<>\\"\'') if match else None
 
     @classmethod
