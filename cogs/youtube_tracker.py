@@ -225,17 +225,59 @@ class YouTubeTracker(commands.Cog):
 
     @staticmethod
     def _text(value: Any) -> str:
+        """Convert YouTube/feedparser text payloads into clean plain text."""
         if value is None:
             return ""
         if isinstance(value, str):
-            return value.strip()
-        if isinstance(value, dict):
-            if value.get("simpleText"):
-                return str(value["simpleText"]).strip()
+            text = value
+        elif isinstance(value, (int, float)):
+            text = str(value)
+        elif isinstance(value, dict):
+            # Feedparser/YouTube sometimes wraps text as {'content': '...'}
+            for key in ("text", "simpleText", "content", "value", "title", "label"):
+                if key in value:
+                    result = YouTubeTracker._text(value.get(key))
+                    if result:
+                        return result
             runs = value.get("runs")
             if isinstance(runs, list):
-                return "".join(str(run.get("text", "")) for run in runs if isinstance(run, dict)).strip()
-        return str(value).strip()
+                return "".join(
+                    YouTubeTracker._text(run.get("text", ""))
+                    for run in runs
+                    if isinstance(run, dict)
+                ).strip()
+            return ""
+        elif isinstance(value, (list, tuple)):
+            return " ".join(
+                YouTubeTracker._text(item) for item in value
+            ).strip()
+        else:
+            text = str(value)
+
+        # Remove HTML markup/entities commonly present in Atom descriptions.
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\\s+", " ", text)
+        return text.strip()
+
+    @classmethod
+    def _clean_url(cls, value: Any) -> Optional[str]:
+        """Return a safe URL string, never a raw dict/list representation."""
+        text = cls._text(value)
+        if not text:
+            return None
+        match = re.search(r"https?://[^\\s<>"']+", text)
+        return match.group(0).rstrip(".,)") if match else None
+
+    @classmethod
+    def _thumbnail_url(cls, item: dict[str, Any]) -> Optional[str]:
+        """Use the supplied thumbnail, falling back to YouTube high-res images."""
+        thumbnail = cls._clean_url(item.get("thumbnail_url"))
+        video_id = cls._text(item.get("video_id") or item.get("content_id"))
+        if thumbnail:
+            return thumbnail
+        if video_id:
+            return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+        return None
 
     @staticmethod
     def _walk_json(value: Any):
@@ -775,11 +817,7 @@ class YouTubeTracker(commands.Cog):
             try:
                 channel = await self.bot.fetch_channel(discord_channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                logger.error(
-                    "YouTube target channel %s is unavailable: %s",
-                    discord_channel_id,
-                    exc,
-                )
+                logger.error("YouTube target channel %s is unavailable: %s", discord_channel_id, exc)
                 if guild_id is not None:
                     await self._notify_missing_target(guild_id, discord_channel_id)
                 return False
@@ -787,106 +825,83 @@ class YouTubeTracker(commands.Cog):
         if not hasattr(channel, "send"):
             return False
 
-        content_type = item.get("content_type", "video")
-        channel_name = item.get("channel_name") or "YouTube"
-        title = item.get("title") or "Untitled"
-        url = item.get("video_url") or f"https://www.youtube.com/watch?v={item['content_id']}"
+        content_type = self._text(item.get("content_type")) or "video"
+        channel_name = self._text(item.get("channel_name")) or "YouTube"
+        title = self._text(item.get("title")) or "Untitled"
+        video_id = self._text(item.get("video_id") or item.get("content_id"))
+        url = self._clean_url(item.get("video_url"))
+        if not url and video_id:
+            url = f"https://www.youtube.com/shorts/{video_id}" if content_type == "short" else f"https://www.youtube.com/watch?v={video_id}"
+        url = url or "https://www.youtube.com/"
+
+        thumbnail_url = self._thumbnail_url(item)
+        upload_time = self._parse_datetime(self._text(item.get("published_at"))) or datetime.now(timezone.utc)
 
         if content_type == "short":
-            color = 0xE62117
-            embed_title = f"📱 New Short: {title}"
-            description = f"**{channel_name}** published a new YouTube Short."
+            color = 0xFF0000
+            header = f"{channel_name} - YouTube Short"
             footer = "YouTube Notification Bot • New Short"
         elif content_type == "live":
-            status = item.get("status") or "UNKNOWN"
-            color = 0xFF0033
-            if status == "UPCOMING":
-                embed_title = f"📅 Scheduled Stream: {title}"
-                description = f"**{channel_name}** has scheduled a live stream."
-            elif status == "LIVE":
-                embed_title = f"🔴 LIVE NOW: {title}"
-                description = f"**{channel_name}** is LIVE now!"
-            else:
-                embed_title = f"🏁 Stream Ended: {title}"
-                description = f"**{channel_name}**'s live stream has ended."
+            color = 0xE62117
+            status = self._text(item.get("status")) or "LIVE"
+            header = f"{channel_name} - {'LIVE NOW' if status == 'LIVE' else 'Live Stream'}"
             footer = "YouTube Notification Bot • Live Stream"
         elif content_type == "community":
             color = 0x4A90E2
-            embed_title = f"💬 New Community Post from {channel_name}"
-            description = item.get("post_text") or "New community post."
+            header = f"{channel_name} - Community Post"
             footer = "YouTube Notification Bot • Community Post"
         else:
             color = 0xFF0000
-            embed_title = f"🎥 New Video: {title}"
-            description = f"**{channel_name}** just uploaded a new video."
-            footer = "YouTube Notification Bot • New Video"
+            header = channel_name
+            footer = "YouTube Notification Bot • New Upload"
 
         embed = discord.Embed(
-            title=embed_title,
+            title=header[:256],
             url=url,
-            description=str(description)[:4096],
+            description=f"**{title}**"[:4096],
             color=discord.Color(color),
+            timestamp=upload_time,
         )
-        embed.add_field(name="Channel", value=f"**{channel_name}**", inline=True)
+        embed.set_author(
+            name="YouTube",
+            icon_url="https://www.youtube.com/s/desktop/fe7f2f5e/img/favicon_144x144.png",
+        )
+        if thumbnail_url:
+            embed.set_image(url=thumbnail_url)
 
-        if content_type == "video":
+        if content_type == "live":
+            status = self._text(item.get("status")) or "LIVE"
+            scheduled = self._text(item.get("scheduled_start")) or "Not provided"
             embed.add_field(
-                name="Details",
-                value=(
-                    f"Length: **{item.get('duration') or 'Unknown'}**\n"
-                    f"Description: **{item.get('description') or 'No description preview available.'}**"
-                )[:1024],
-                inline=False,
-            )
-        elif content_type == "short":
-            embed.add_field(
-                name="Short",
-                value=f"[Open directly in Shorts]({url})",
-                inline=False,
-            )
-        elif content_type == "live":
-            status = item.get("status") or "LIVE"
-            scheduled = item.get("scheduled_start") or "Not provided"
-            embed.add_field(
-                name="Stream Status",
+                name="🔴 Stream Status",
                 value=f"**{status}** • Scheduled start: **{scheduled}**",
                 inline=False,
             )
         elif content_type == "community":
-            if item.get("poll_preview"):
-                embed.add_field(
-                    name="Poll",
-                    value=str(item["poll_preview"])[:1024],
-                    inline=False,
-                )
-            if item.get("post_images"):
-                embed.add_field(
-                    name="Media",
-                    value=" • ".join(
-                        f"[Image {index}]({image})"
-                        for index, image in enumerate(item["post_images"], 1)
-                    )[:1024],
-                    inline=False,
-                )
-            else:
-                embed.add_field(
-                    name="Post",
-                    value=str(item.get("post_text") or "New post.")[:1024],
-                    inline=False,
-                )
+            post_text = self._text(item.get("post_text"))
+            if post_text:
+                embed.add_field(name="Post", value=post_text[:1024], inline=False)
+            poll = self._text(item.get("poll_preview"))
+            if poll:
+                embed.add_field(name="Poll", value=poll[:1024], inline=False)
+        else:
+            duration = self._text(item.get("duration"))
+            if duration:
+                embed.add_field(name="Duration", value=f"**{duration}**", inline=True)
 
-        if item.get("thumbnail_url"):
-            embed.set_image(url=item["thumbnail_url"])
-        embed.timestamp = (
-            self._parse_datetime(item.get("published_at"))
-            or datetime.now(timezone.utc)
+        embed.set_footer(
+            text=footer,
+            icon_url="https://www.youtube.com/s/desktop/fe7f2f5e/img/favicon_144x144.png",
         )
-        embed.set_footer(text=footer)
 
+        # Keep the URL out of Discord's automatic preview in the header while
+        # the embed itself owns the visual thumbnail/card.
         ping_parts = [f"<@{user_id}>" for user_id in (ping_user_ids or [])]
         if ping_role_id:
-            ping_parts.insert(0, f"<@&{ping_role_id}>")
-        content = " ".join(ping_parts + [embed_title]).strip()
+            ping_parts.append(f"<@&{ping_role_id}>")
+        header_message = f"New video from **{channel_name}**! Watch here: <{url}>"
+        content = " ".join([header_message, *ping_parts]).strip()
+
         try:
             await channel.send(
                 content=content,
@@ -900,19 +915,10 @@ class YouTubeTracker(commands.Cog):
             )
             if guild_id is not None:
                 self._missing_target_alerted.discard((guild_id, discord_channel_id))
-            logger.info(
-                "Sent YouTube %s notification for %s",
-                content_type,
-                item["content_id"],
-            )
+            logger.info("Sent YouTube %s notification for %s", content_type, video_id or item.get("content_id"))
             return True
         except (discord.Forbidden, discord.HTTPException) as exc:
-            logger.error(
-                "Failed to send YouTube %s notification for %s: %s",
-                content_type,
-                item["content_id"],
-                exc,
-            )
+            logger.error("Failed to send YouTube %s notification for %s: %s", content_type, video_id or item.get("content_id"), exc)
             if guild_id is not None and isinstance(exc, discord.Forbidden):
                 await self._notify_missing_target(guild_id, discord_channel_id)
             return False
