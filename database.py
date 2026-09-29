@@ -130,6 +130,17 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS say_messages (
+                    message_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    command_name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS message_cache (
                     message_id INTEGER PRIMARY KEY,
                     guild_id INTEGER NOT NULL,
@@ -615,6 +626,36 @@ class Database:
                 str(discord_target_channel_id),
             ))
             return cursor.rowcount > 0
+
+    def save_say_message(
+        self,
+        message_id: int,
+        guild_id: int,
+        channel_id: int,
+        author_id: int,
+        command_name: str,
+    ) -> None:
+        with self._cursor() as cursor:
+            cursor.execute("""
+                INSERT OR REPLACE INTO say_messages
+                    (message_id, guild_id, channel_id, author_id, command_name)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                message_id,
+                guild_id,
+                channel_id,
+                author_id,
+                command_name,
+            ))
+
+    def get_say_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+        with self._cursor() as cursor:
+            row = cursor.execute("""
+                SELECT message_id, guild_id, channel_id, author_id, command_name, created_at
+                FROM say_messages
+                WHERE message_id = ?
+            """, (message_id,)).fetchone()
+            return dict(row) if row else None
 
     # Persistent message cache -------------------------------------------
 
