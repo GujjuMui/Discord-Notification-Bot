@@ -238,23 +238,9 @@ async def on_ready() -> None:
         logger.info("Categorized server logging is loaded.")
 
     try:
-        # Remove any old guild-scoped copies created by a previous sync strategy.
-        # Commands are registered globally below, so each guild should have no
-        # duplicate local copies.
-        for guild in bot.guilds:
-            try:
-                bot.tree.clear_commands(guild=guild)
-                await bot.tree.sync(guild=guild)
-            except discord.HTTPException:
-                logger.exception(
-                    "Failed to clear old guild slash commands for %s (%s).",
-                    guild.name,
-                    guild.id,
-                )
-
-        # Register the command tree globally once.
-        # Discord may take a short while to propagate global command changes,
-        # but this prevents duplicate global + guild command entries.
+        # Commands are global. Do not PUT an empty guild command tree on every
+        # startup: doing so needlessly consumes Discord's command-sync rate limit
+        # and can delay the global sync by tens of seconds.
         synced = await bot.tree.sync()
         logger.info(
             "Synced %d global slash command(s): %s",
