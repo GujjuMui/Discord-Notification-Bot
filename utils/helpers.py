@@ -22,8 +22,7 @@ def format_mentions(text_content: str, guild: Optional[discord.Guild] = None) ->
 
     def raw_id(match: re.Match[str]) -> str:
         value = int(match.group(1))
-        member = guild.get_member(value)
-        return member.mention if member else match.group(0)
+        return f"<@{value}>"
 
     text = re.sub(r"(?<![\\d<@&])\\b(\\d{15,21})\\b(?!\\d)", raw_id, text)
 
