@@ -228,6 +228,7 @@ class Utility(commands.Cog):
         reply_to_message_id: Optional[str] = None,
         anonymous: bool = True,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         try:
             target = await self._get_target(interaction, target_channel)
             await self._send_say(
@@ -245,7 +246,7 @@ class Utility(commands.Cog):
                 anonymous=anonymous,
                 command_name="say",
             )
-            await interaction.response.send_message("✅ Announcement sent.", ephemeral=True)
+            await interaction.followup.send("✅ Announcement sent.", ephemeral=True)
         except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
             await self._error(interaction, str(exc))
 
@@ -275,6 +276,7 @@ class Utility(commands.Cog):
         target_channel: Optional[discord.TextChannel] = None,
         target_user: Optional[discord.User] = None,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
         try:
             target = await self._get_target(interaction, target_channel)
             await self._send_say(
@@ -295,7 +297,7 @@ class Utility(commands.Cog):
                 button_label=button_label,
                 button_url=button_url,
             )
-            await interaction.response.send_message("✅ Embed announcement sent.", ephemeral=True)
+            await interaction.followup.send("✅ Embed announcement sent.", ephemeral=True)
         except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
             await self._error(interaction, str(exc))
 
