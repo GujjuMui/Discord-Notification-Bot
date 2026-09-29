@@ -453,11 +453,21 @@ class ServerLogger(commands.Cog):
         if image:
             embed.set_image(url=image)
 
+        mention_content = f"<@{target_id}>" if target_id else None
         try:
             if file is None:
-                await channel.send(embed=embed)
+                await channel.send(
+                    content=mention_content,
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(users=bool(mention_content), roles=True, everyone=True, replied_user=True),
+                )
             else:
-                await channel.send(embed=embed, file=file)
+                await channel.send(
+                    content=mention_content,
+                    embed=embed,
+                    file=file,
+                    allowed_mentions=discord.AllowedMentions(users=bool(mention_content), roles=True, everyone=True, replied_user=True),
+                )
             return True
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Could not send %s audit event for guild %s", log_type, guild_id)
