@@ -1254,10 +1254,12 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 target_id = int(item["discord_target_channel_id"])
                 target = f"<#{target_id}>" if target_id > 0 else "Not configured"
                 ping_role = f"<@&{item['ping_role_id']}>" if item.get("ping_role_id") else "None"
+                ping_users = db.decode_yt_ping_users(item.get("ping_user_ids"))
+                ping_user_text = ", ".join(f"<@{user_id}>" for user_id in ping_users) or "None"
                 filters = item.get("content_types") or "all"
                 destinations.append(
                     f"• [{item['yt_channel_name']}]({item['yt_channel_url']}) ➔ {target} "
-                    f"(Filters: {filters} | Pings: {ping_role})"
+                    f"(Filters: {filters} | Role: {ping_role} | Users: {ping_user_text})"
                 )
 
             embed.add_field(
