@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from database import db
 from cogs.server_logger import is_trusted_or_owner
+from utils.helpers import format_mentions, extract_mention_ids
 
 
 def _parse_color(value: Optional[str]) -> discord.Color:
@@ -92,15 +93,27 @@ class Utility(commands.Cog):
         ping_role: Optional[str],
         reply_to_message_id: Optional[str],
         anonymous: bool,
+        target_user: Optional[discord.User] = None,
         command_name: str,
         footer: Optional[str] = None,
         button_label: Optional[str] = None,
         button_url: Optional[str] = None,
     ) -> discord.Message:
+        message = format_mentions(message or "", interaction.guild)
         ping_text, allowed_mentions = _resolve_ping(interaction.guild, ping_role)
         content = message or ""
+        if target_user:
+            content = f"{target_user.mention} {content}".strip()
         if ping_text:
             content = f"{ping_text} {content}".strip()
+
+        mention_users, mention_roles, mention_everyone = extract_mention_ids(content)
+        allowed_mentions = discord.AllowedMentions(
+            everyone=mention_everyone,
+            roles=bool(mention_roles) or bool(ping_role),
+            users=bool(mention_users) or bool(target_user),
+            replied_user=True,
+        )
 
         if media_url and not embed_enabled:
             content = f"{content}\n{media_url}".strip()
@@ -154,6 +167,7 @@ class Utility(commands.Cog):
             file=file,
             view=view,
             reference=reference,
+            mention_author=True if reference else None,
             allowed_mentions=allowed_mentions,
         )
         db.save_say_message(
@@ -190,6 +204,7 @@ class Utility(commands.Cog):
         embed_title="Optional embed title.",
         embed_color="Hex color such as #007AFF or 0xFF0000.",
         ping_role="Role mention, @everyone, or @here.",
+        target_user="Optional user to directly ping.",
         reply_to_message_id="Optional message ID to reply to.",
         anonymous="If false, adds a small staff-credit footer to embeds.",
     )
@@ -204,6 +219,7 @@ class Utility(commands.Cog):
         embed_title: Optional[str] = None,
         embed_color: Optional[str] = None,
         ping_role: Optional[str] = None,
+        target_user: Optional[discord.User] = None,
         reply_to_message_id: Optional[str] = None,
         anonymous: bool = True,
     ) -> None:
@@ -219,6 +235,7 @@ class Utility(commands.Cog):
                 embed_title=embed_title,
                 embed_color=embed_color,
                 ping_role=ping_role,
+                target_user=target_user,
                 reply_to_message_id=reply_to_message_id,
                 anonymous=anonymous,
                 command_name="say",
@@ -238,6 +255,7 @@ class Utility(commands.Cog):
         button_label="Optional button label.",
         button_url="Optional button URL.",
         target_channel="Destination channel. Defaults to current channel.",
+        target_user="Optional user to directly ping.",
     )
     async def say_embed(
         self,
@@ -250,6 +268,7 @@ class Utility(commands.Cog):
         button_label: Optional[str] = None,
         button_url: Optional[str] = None,
         target_channel: Optional[discord.TextChannel] = None,
+        target_user: Optional[discord.User] = None,
     ) -> None:
         try:
             target = await self._get_target(interaction, target_channel)
@@ -263,6 +282,7 @@ class Utility(commands.Cog):
                 embed_title=title,
                 embed_color=color,
                 ping_role=None,
+                target_user=target_user,
                 reply_to_message_id=None,
                 anonymous=True,
                 command_name="say_embed",
