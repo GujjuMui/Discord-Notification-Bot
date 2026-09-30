@@ -24,7 +24,7 @@ def format_mentions(text_content: str, guild: Optional[discord.Guild] = None) ->
         value = int(match.group(1))
         return f"<@{value}>"
 
-    text = re.sub(r"(?<![\\d<@&])\\b(\\d{15,21})\\b(?!\\d)", raw_id, text)
+    text = re.sub(r"(?<![\d<@&])\b(\d{15,21})\b(?!\d)", raw_id, text)
 
     def handle(match: re.Match[str]) -> str:
         handle = match.group(1)
@@ -36,14 +36,14 @@ def format_mentions(text_content: str, guild: Optional[discord.Guild] = None) ->
         )
         return member.mention if member else match.group(0)
 
-    text = re.sub(r"(?<![\\w<@])@([A-Za-z0-9_.-]{2,32})\\b", handle, text)
+    text = re.sub(r"(?<![\w<@])@([A-Za-z0-9_.-]{2,32})\b", handle, text)
     return text
 
 
 def extract_mention_ids(text_content: str) -> tuple[list[int], list[int], bool]:
     """Return user IDs, role IDs, and whether @everyone/@here occurs."""
     text = str(text_content or "")
-    users = [int(value) for value in re.findall(r"<@!?(\\d{15,21})>", text)]
-    roles = [int(value) for value in re.findall(r"<@&(\\d{15,21})>", text)]
-    everyone = bool(re.search(r"(?<!\\w)@(everyone|here)(?!\\w)", text, re.I))
+    users = [int(value) for value in re.findall(r"<@!?(\d{15,21})>", text)]
+    roles = [int(value) for value in re.findall(r"<@&(\d{15,21})>", text)]
+    everyone = bool(re.search(r"(?<!\w)@(everyone|here)(?!\w)", text, re.I))
     return list(dict.fromkeys(users)), list(dict.fromkeys(roles)), everyone

@@ -1307,9 +1307,13 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
             return
 
+        # Defer immediately — configure_logs() creates Discord channels (network I/O)
+        # and can easily exceed the 3-second interaction response window.
+        await interaction.response.defer(ephemeral=True)
+
         server_logger = interaction.client.get_cog("ServerLogger")
         if server_logger is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Server logger is not loaded.",
                 ephemeral=True,
             )
@@ -1323,7 +1327,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 channel=channel,
             )
         except (ValueError, discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ Could not configure server logs: {exc}",
                 ephemeral=True,
             )
@@ -1334,14 +1338,14 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 f"• **{key}** → {value.mention}"
                 for key, value in result.items()
             )
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "✅ **Server logging configured.**\n"
                 "Created/linked the categorized logging channels:\n" + mentions,
                 ephemeral=True,
             )
         else:
             mapped = next(iter(result.values()))
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ **{type.value if type else 'log'}** logs will now go to {mapped.mention}.",
                 ephemeral=True,
             )
@@ -1425,9 +1429,10 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 value=f"**{selected_types}**",
                 inline=True,
             )
+            channel_url = result.get("channel_url") or f"https://www.youtube.com/channel/{result['channel_id']}"
             embed.add_field(
                 name="YouTube Channel",
-                value=f"[Open channel]({result['channel_url'] if 'channel_url' in result else f'https://www.youtube.com/channel/{result['channel_id']}'})",
+                value=f"[Open channel]({channel_url})",
                 inline=False,
             )
             await interaction.followup.send(embed=embed, ephemeral=True)

@@ -31,7 +31,13 @@ DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_val
 
 SYNC_COMMANDS = os.getenv("SYNC_COMMANDS", "false").strip().lower() in {"true", "1"}
 HTTP_USER_AGENT = "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)"
-POLL_INTERVAL = 60
+# Default 300 s (5 min) — keeps RSS polling well within free-tier rate limits.
+# Set POLL_INTERVAL=60 in .env only for testing; production should use 180–300.
+_poll_raw = os.getenv("POLL_INTERVAL", "300").strip()
+try:
+    POLL_INTERVAL: int = max(60, int(_poll_raw))
+except ValueError:
+    POLL_INTERVAL = 300
 HTTP_TIMEOUT = 20
 BOT_PREFIX = "!"
 
