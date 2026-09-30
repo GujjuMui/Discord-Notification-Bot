@@ -1037,7 +1037,7 @@ class YouTubeTracker(commands.Cog):
         )
         embed.set_author(
             name="YouTube",
-            icon_url="https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/1024px-YouTube_full-color_icon_%282017%29.svg.png",
+            icon_url="https://www.youtube.com/s/desktop/e4d15d2c/img/favicon_144x144.png",
         )
         if thumbnail_url:
             embed.set_image(url=thumbnail_url)
@@ -1064,7 +1064,7 @@ class YouTubeTracker(commands.Cog):
 
         embed.set_footer(
             text=footer,
-            icon_url="https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/1024px-YouTube_full-color_icon_%282017%29.svg.png",
+            icon_url="https://www.youtube.com/s/desktop/e4d15d2c/img/favicon_144x144.png",
         )
 
         # Keep the URL out of Discord's automatic preview in the header while
