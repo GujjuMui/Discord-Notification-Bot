@@ -106,6 +106,96 @@ class ServerLogger(commands.Cog):
     async def before_message_retention_cleanup(self) -> None:
         await self.bot.wait_until_ready()
 
+    # ------------------------------------------------------------------
+    # Auto-restore log channels on startup
+    # ------------------------------------------------------------------
+
+    async def restore_guild_log_channels(self, guild: discord.Guild) -> int:
+        """Scan a guild for the existing 📁 SERVER LOGS category and re-register
+        any named log channels found there into the database.
+
+        This is the safety net for ephemeral deployments (e.g. Railway) where
+        the SQLite database is wiped on redeploy but the Discord channels
+        remain. Returns the number of channel IDs restored.
+
+        Only updates the DB — never creates or deletes any Discord channels.
+        """
+        existing_db = db.get_guild_log_channels(guild.id)
+
+        # If the DB already has all 8 channels configured, nothing to do.
+        if existing_db and all(
+            existing_db.get(col) for col in LOG_COLUMNS.values()
+        ):
+            return 0
+
+        category = discord.utils.find(
+            lambda c: c.name == "📁 SERVER LOGS",
+            guild.categories,
+        )
+        if category is None:
+            return 0
+
+        found: dict[str, int] = {}
+        for key, channel_name in LOG_CHANNEL_NAMES.items():
+            channel = discord.utils.find(
+                lambda c, n=channel_name: c.name == n and c.category_id == category.id,
+                guild.text_channels,
+            )
+            if channel:
+                found[key] = channel.id
+
+        if not found:
+            return 0
+
+        # Merge with whatever is already in the DB so we don't overwrite
+        # manually-mapped channels with None.
+        current = existing_db or {}
+        db.set_guild_log_channels(
+            guild.id,
+            category_id=category.id,
+            chat_log_id=found.get("chat") or current.get("chat_log_id"),
+            member_log_id=found.get("member") or current.get("member_log_id"),
+            profile_log_id=found.get("profile") or current.get("profile_log_id"),
+            role_log_id=found.get("role") or current.get("role_log_id"),
+            channel_log_id=found.get("channel") or current.get("channel_log_id"),
+            server_log_id=found.get("server") or current.get("server_log_id"),
+            voice_log_id=found.get("voice") or current.get("voice_log_id"),
+            mod_log_id=found.get("mod") or current.get("mod_log_id"),
+            enabled=True,
+        )
+        logger.info(
+            "[AutoRestore] Guild %s (%s): restored %d log channel(s) from "
+            "existing Discord category '📁 SERVER LOGS'.",
+            guild.name, guild.id, len(found),
+        )
+        return len(found)
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """On every startup, scan all guilds and restore log channel registrations
+        from existing Discord channels if the database is missing them."""
+        restored_guilds = 0
+        for guild in self.bot.guilds:
+            try:
+                count = await self.restore_guild_log_channels(guild)
+                if count:
+                    restored_guilds += 1
+            except Exception:
+                logger.exception(
+                    "[AutoRestore] Failed to restore log channels for guild %s (%s).",
+                    guild.name, guild.id,
+                )
+        if restored_guilds:
+            logger.info(
+                "[AutoRestore] Log channel auto-restore complete: %d guild(s) restored.",
+                restored_guilds,
+            )
+        else:
+            logger.info("[AutoRestore] All guild log channel registrations are current.")
+        # Warm message cache after restore so delete events have content.
+        for guild in self.bot.guilds:
+            await self._warm_message_cache(guild)
+
 
 
     async def configure_logs(
@@ -605,10 +695,6 @@ class ServerLogger(commands.Cog):
                 )
         logger.debug("Message cache warm-up for %s: %s messages", guild.name, total)
 
-    @commands.Cog.listener()
-    async def on_ready(self) -> None:
-        for guild in self.bot.guilds:
-            await self._warm_message_cache(guild)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
