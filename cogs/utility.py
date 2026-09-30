@@ -1,4 +1,4 @@
-"""Staff utility commands for controlled bot-authored announcements."""
+"""Staff utility commands: /say (direct send) and /announcement (preview + confirm)."""
 
 from __future__ import annotations
 
@@ -11,56 +11,117 @@ from discord.ext import commands
 
 from database import db
 from cogs.server_logger import is_trusted_or_owner
-from utils.helpers import format_mentions, extract_mention_ids
 
+
+# ---------------------------------------------------------------------------
+# Announcement preview UI
+# ---------------------------------------------------------------------------
+
+class AnnouncementConfirmView(discord.ui.View):
+    """Ephemeral preview view with Confirm / Cancel buttons."""
+
+    def __init__(
+        self,
+        embed: discord.Embed,
+        content: str,
+        target_channel: discord.TextChannel,
+        allowed_mentions: discord.AllowedMentions,
+        author_id: int,
+    ):
+        super().__init__(timeout=120)
+        self._embed = embed
+        self._content = content
+        self._target = target_channel
+        self._allowed_mentions = allowed_mentions
+        self._author_id = author_id
+        self.confirmed = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._author_id:
+            await interaction.response.send_message(
+                "This preview belongs to someone else.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Confirm & Post", style=discord.ButtonStyle.success)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self._target.send(
+                content=self._content or None,
+                embed=self._embed,
+                allowed_mentions=self._allowed_mentions,
+            )
+            self.confirmed = True
+            for child in self.children:
+                child.disabled = True
+            await interaction.followup.send(
+                f"✅ Announcement posted to {self._target.mention}.", ephemeral=True
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            await interaction.followup.send(
+                f"❌ Could not post announcement: {exc}", ephemeral=True
+            )
+        self.stop()
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="Announcement cancelled.", view=self
+        )
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _parse_color(value: Optional[str]) -> discord.Color:
     if not value:
         return discord.Color.blurple()
     raw = value.strip().lower().replace("#", "").replace("0x", "")
     if not re.fullmatch(r"[0-9a-f]{6}", raw):
-        raise ValueError("Color must be a 6-digit hex value such as #007AFF or 0x34C759.")
+        raise ValueError("Color must be a 6-digit hex value such as #FF0000 or 0x007AFF.")
     return discord.Color(int(raw, 16))
 
 
-def _resolve_ping(guild: discord.Guild, value: Optional[str]) -> tuple[str, discord.AllowedMentions]:
-    if not value:
-        return "", discord.AllowedMentions.none()
-
-    raw = value.strip()
-    lowered = raw.lower()
-    if lowered in {"@everyone", "everyone"}:
-        return "@everyone", discord.AllowedMentions(everyone=True, roles=True, users=True)
-    if lowered in {"@here", "here"}:
-        return "@here", discord.AllowedMentions(everyone=True, roles=True, users=True)
-
-    match = re.fullmatch(r"<@&?(\d{15,21})>", raw)
-    role = None
-    if match:
-        role = guild.get_role(int(match.group(1)))
-    else:
-        role = discord.utils.find(lambda item: item.name.lower() == lowered.lstrip("@"), guild.roles)
-
-    if role is None:
-        raise ValueError("Ping role not found. Use a role mention like <@&ROLE_ID>, the role name, @everyone, or @here.")
-    return role.mention, discord.AllowedMentions(everyone=True, roles=True, users=True)
+def _build_allowed_mentions(content: str, ping_role: Optional[str]) -> discord.AllowedMentions:
+    """Allow mentions that are actually present in content."""
+    has_everyone = bool(re.search(r"(?<!\w)@(everyone|here)(?!\w)", content, re.I))
+    has_roles = bool(re.search(r"<@&\d+>", content))
+    has_users = bool(re.search(r"<@!?\d+>", content))
+    return discord.AllowedMentions(
+        everyone=has_everyone or bool(ping_role and ping_role.lower() in {"@everyone", "everyone", "@here", "here"}),
+        roles=has_roles or bool(ping_role),
+        users=has_users,
+        replied_user=True,
+    )
 
 
-class SayEmbedView(discord.ui.View):
-    def __init__(self, label: str, url: str):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Button(label=label[:80] or "Open Link", url=url))
-
+# ---------------------------------------------------------------------------
+# Cog
+# ---------------------------------------------------------------------------
 
 class Utility(commands.Cog):
-    """Authorized staff announcement and message-management commands."""
+    """Authorized staff announcement and message commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     async def _error(self, interaction: discord.Interaction, message: str) -> None:
         embed = discord.Embed(
-            title="🚫 /say Error",
+            title="🚫 Error",
             description=message,
             color=discord.Color.red(),
         )
@@ -69,247 +130,234 @@ class Utility(commands.Cog):
         else:
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    async def _get_target(
-        self,
-        interaction: discord.Interaction,
-        target_channel: Optional[discord.TextChannel],
-    ) -> discord.TextChannel:
-        channel = target_channel or interaction.channel
-        if not isinstance(channel, discord.TextChannel):
-            raise ValueError("Target must be a normal text channel.")
-        return channel
+    # ------------------------------------------------------------------
+    # /say — simple, direct, current channel
+    # ------------------------------------------------------------------
 
-    async def _send_say(
+    @app_commands.command(
+        name="say",
+        description="Send a message as the bot in the current channel. Supports mentions, links, and attachments.",
+    )
+    @is_trusted_or_owner()
+    @app_commands.describe(
+        message="Message content. Raw mentions like <@user_id> and <@&role_id> work natively.",
+        attachment="Optional file, image, or GIF to attach.",
+    )
+    async def say(
         self,
         interaction: discord.Interaction,
-        *,
         message: str,
-        target_channel: discord.TextChannel,
-        attachment: Optional[discord.Attachment],
-        media_url: Optional[str],
-        embed_enabled: bool,
-        embed_title: Optional[str],
-        embed_color: Optional[str],
-        ping_role: Optional[str],
-        reply_to_message_id: Optional[str],
-        anonymous: bool,
-        command_name: str,
-        target_user: Optional[discord.User] = None,
-        footer: Optional[str] = None,
-        button_label: Optional[str] = None,
-        button_url: Optional[str] = None,
-    ) -> discord.Message:
-        message = format_mentions(message or "", interaction.guild)
-        ping_text, allowed_mentions = _resolve_ping(interaction.guild, ping_role)
-        content = message or ""
+        attachment: Optional[discord.Attachment] = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
 
-        # Build the direct-user mention explicitly from the Discord ID. This
-        # avoids relying on cached member formatting and makes the mention
-        # target unambiguous to Discord's mention parser.
-        direct_user_mention = f"<@{target_user.id}>" if target_user else ""
-        if direct_user_mention:
-            content = f"{direct_user_mention} {content}".strip()
-        if ping_text:
-            content = f"{ping_text} {content}".strip()
-
-        mention_users, mention_roles, mention_everyone = extract_mention_ids(content)
-        allowed_mentions = discord.AllowedMentions(
-            everyone=mention_everyone,
-            roles=bool(mention_roles) or bool(ping_role),
-            users=True if mention_users or target_user else False,
-            replied_user=True,
-        )
-
-        if media_url and not embed_enabled:
-            content = f"{content}\n{media_url}".strip()
-
-        if not embed_enabled and not content and not attachment:
-            raise ValueError("Provide message text, media_url, or an attachment.")
-
-        if embed_enabled:
-            if len(message) > 4096:
-                raise ValueError("Embed message text is limited to 4096 characters.")
-            embed = discord.Embed(
-                title=embed_title or None,
-                description=message or None,
-                color=_parse_color(embed_color),
+        if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.followup.send(
+                "This command can only be used in a server text channel.", ephemeral=True
             )
-            if media_url:
-                embed.set_image(url=media_url)
-            if footer:
-                embed.set_footer(text=footer)
-            elif not anonymous:
-                embed.set_footer(text=f"📢 Announcement sent by {interaction.user.display_name}")
+            return
 
-            view = None
-            if button_url:
-                if not re.match(r"^https?://", button_url, re.I):
-                    raise ValueError("Button URL must start with http:// or https://.")
-                view = SayEmbedView(button_label or "Open Link", button_url)
-        else:
-            if len(content) > 2000:
-                raise ValueError("Discord message content is limited to 2000 characters.")
-            embed = None
-            view = None
+        content = message.strip()
+        if not content and not attachment:
+            await interaction.followup.send(
+                "Provide a message or attachment.", ephemeral=True
+            )
+            return
 
+        if len(content) > 2000:
+            await interaction.followup.send(
+                "Message is over Discord's 2000-character limit.", ephemeral=True
+            )
+            return
+
+        allowed_mentions = _build_allowed_mentions(content, None)
         file = await attachment.to_file() if attachment else None
 
-        reference = None
-        if reply_to_message_id:
-            try:
-                message_id = int(reply_to_message_id.strip())
-            except ValueError as exc:
-                raise ValueError("reply_to_message_id must be a Discord message ID.") from exc
-            try:
-                referenced = await target_channel.fetch_message(message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                raise ValueError("Could not find or access that message in the target channel.") from exc
-            reference = referenced.to_reference(fail_if_not_exists=False)
+        try:
+            sent = await interaction.channel.send(
+                content=content or None,
+                file=file,
+                allowed_mentions=allowed_mentions,
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            await interaction.followup.send(f"❌ Could not send: {exc}", ephemeral=True)
+            return
 
-        sent = await target_channel.send(
-            content=content or None,
-            embed=embed,
-            file=file,
-            view=view,
-            reference=reference,
-            mention_author=True if reference else None,
-            allowed_mentions=allowed_mentions,
-        )
+        # Audit log
         db.save_say_message(
             sent.id,
             interaction.guild.id,
-            target_channel.id,
+            interaction.channel.id,
             interaction.user.id,
-            command_name,
+            "say",
         )
-
         server_logger = getattr(self.bot, "server_logger", None)
         if server_logger:
             try:
                 await server_logger.log_say_event(
                     interaction.guild.id,
                     interaction.user,
-                    target_channel.id,
-                    message,
-                    bool(attachment or media_url),
+                    interaction.channel.id,
+                    content,
+                    bool(attachment),
                 )
             except Exception:
-                # Sending the announcement must not fail because audit logging failed.
                 pass
-        return sent
 
-    @app_commands.command(name="say", description="Send an authorized bot announcement with media, embeds, mentions, or replies.")
-    @is_trusted_or_owner()
-    @app_commands.describe(
-        message="Message text / Markdown / custom emoji / mention content.",
-        target_channel="Destination channel. Defaults to the current channel.",
-        attachment="Optional uploaded file, image, GIF, PDF, or document.",
-        media_url="Optional image/GIF URL. Embedded when embed=True, otherwise appended.",
-        embed="Send the message as a Discord Embed.",
-        embed_title="Optional embed title.",
-        embed_color="Hex color such as #007AFF or 0xFF0000.",
-        ping_role="Role mention, @everyone, or @here.",
-        target_user="Optional user to directly ping.",
-        reply_to_message_id="Optional message ID to reply to.",
-        anonymous="If false, adds a small staff-credit footer to embeds.",
+        await interaction.followup.send("✅ Message sent.", ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # /announcement — advanced with interactive preview
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="announcement",
+        description="Create a rich announcement with a live preview before posting.",
     )
-    async def say(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        target_channel: Optional[discord.TextChannel] = None,
-        attachment: Optional[discord.Attachment] = None,
-        media_url: Optional[str] = None,
-        embed: bool = False,
-        embed_title: Optional[str] = None,
-        embed_color: Optional[str] = None,
-        ping_role: Optional[str] = None,
-        target_user: Optional[discord.User] = None,
-        reply_to_message_id: Optional[str] = None,
-        anonymous: bool = True,
-    ) -> None:
-        await interaction.response.defer(ephemeral=True)
-        try:
-            target = await self._get_target(interaction, target_channel)
-            await self._send_say(
-                interaction,
-                message=message,
-                target_channel=target,
-                attachment=attachment,
-                media_url=media_url,
-                embed_enabled=embed,
-                embed_title=embed_title,
-                embed_color=embed_color,
-                ping_role=ping_role,
-                target_user=target_user,
-                reply_to_message_id=reply_to_message_id,
-                anonymous=anonymous,
-                command_name="say",
-            )
-            await interaction.followup.send("✅ Announcement sent.", ephemeral=True)
-        except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
-            await self._error(interaction, str(exc))
-        except Exception as exc:
-            await self._error(interaction, f"Unexpected error while sending the announcement: {exc}")
-
-    @app_commands.command(name="say_embed", description="Create a rich multi-field announcement embed.")
     @is_trusted_or_owner()
     @app_commands.describe(
+        target_channel="Channel to post the announcement in.",
         title="Embed title.",
-        description="Embed description.",
-        color="Hex color.",
-        image_url="Optional image/GIF URL.",
+        description="Main announcement body. Supports markdown and raw mentions.",
+        color="Hex color code, e.g. #FF0000 or 0x007AFF.",
+        ping_role="Role or @everyone/@here to ping alongside the announcement.",
+        image_url="Optional image or GIF URL to display in the embed.",
         footer="Optional footer text.",
-        button_label="Optional button label.",
-        button_url="Optional button URL.",
-        target_channel="Destination channel. Defaults to current channel.",
-        target_user="Optional user to directly ping.",
+        button_label="Label for an optional link button.",
+        button_url="URL for the optional link button (must start with https://).",
+        anonymous="Hide the 'sent by' attribution in the footer. Default: true.",
     )
-    async def say_embed(
+    async def announcement(
         self,
         interaction: discord.Interaction,
+        target_channel: discord.TextChannel,
         title: str,
         description: str,
         color: Optional[str] = None,
+        ping_role: Optional[str] = None,
         image_url: Optional[str] = None,
         footer: Optional[str] = None,
         button_label: Optional[str] = None,
         button_url: Optional[str] = None,
-        target_channel: Optional[discord.TextChannel] = None,
-        target_user: Optional[discord.User] = None,
+        anonymous: bool = True,
     ) -> None:
         await interaction.response.defer(ephemeral=True)
-        try:
-            target = await self._get_target(interaction, target_channel)
-            await self._send_say(
-                interaction,
-                message=description,
-                target_channel=target,
-                attachment=None,
-                media_url=image_url,
-                embed_enabled=True,
-                embed_title=title,
-                embed_color=color,
-                ping_role=None,
-                target_user=target_user,
-                reply_to_message_id=None,
-                anonymous=True,
-                command_name="say_embed",
-                footer=footer,
-                button_label=button_label,
-                button_url=button_url,
-            )
-            await interaction.followup.send("✅ Embed announcement sent.", ephemeral=True)
-        except (ValueError, discord.Forbidden, discord.HTTPException) as exc:
-            await self._error(interaction, str(exc))
-        except Exception as exc:
-            await self._error(interaction, f"Unexpected error while sending the embed announcement: {exc}")
 
-    @app_commands.command(name="edit_say", description="Edit a message previously sent by /say or /say_embed.")
+        if not interaction.guild:
+            await interaction.followup.send(
+                "This command can only be used inside a server.", ephemeral=True
+            )
+            return
+
+        # Validate inputs
+        try:
+            embed_color = _parse_color(color)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        if button_url and not re.match(r"^https?://", button_url, re.I):
+            await interaction.followup.send(
+                "Button URL must start with http:// or https://.", ephemeral=True
+            )
+            return
+
+        if len(description) > 4096:
+            await interaction.followup.send(
+                "Description is over Discord's 4096-character embed limit.", ephemeral=True
+            )
+            return
+
+        # Build ping content
+        ping_content = ""
+        if ping_role:
+            raw = ping_role.strip().lower()
+            if raw in {"@everyone", "everyone"}:
+                ping_content = "@everyone"
+            elif raw in {"@here", "here"}:
+                ping_content = "@here"
+            else:
+                # Try to resolve as a role mention or name
+                match = re.fullmatch(r"<@&?(\d{15,21})>", ping_role.strip())
+                if match:
+                    ping_content = f"<@&{match.group(1)}>"
+                else:
+                    role_obj = discord.utils.find(
+                        lambda r: r.name.lower() == raw.lstrip("@"),
+                        interaction.guild.roles,
+                    )
+                    if role_obj:
+                        ping_content = role_obj.mention
+                    else:
+                        await interaction.followup.send(
+                            f"Could not find role `{ping_role}`. Use a role mention, role name, @everyone, or @here.",
+                            ephemeral=True,
+                        )
+                        return
+
+        # Build embed
+        embed = discord.Embed(
+            title=title[:256],
+            description=description,
+            color=embed_color,
+        )
+        if image_url:
+            embed.set_image(url=image_url)
+        if footer:
+            embed.set_footer(text=footer[:2048])
+        elif not anonymous:
+            embed.set_footer(
+                text=f"📢 Announcement by {interaction.user.display_name}"
+            )
+
+        # Optional link button
+        view = None
+        if button_url:
+            view = discord.ui.View(timeout=None)
+            view.add_item(
+                discord.ui.Button(
+                    label=(button_label or "Open Link")[:80],
+                    style=discord.ButtonStyle.link,
+                    url=button_url,
+                )
+            )
+
+        allowed_mentions = _build_allowed_mentions(ping_content, ping_role)
+
+        # Build the preview confirm view
+        confirm_view = AnnouncementConfirmView(
+            embed=embed,
+            content=ping_content,
+            target_channel=target_channel,
+            allowed_mentions=allowed_mentions,
+            author_id=interaction.user.id,
+        )
+
+        preview_text = (
+            f"**Preview of your announcement for {target_channel.mention}**\n"
+            f"{'Pings: ' + ping_content if ping_content else 'No ping.'}\n\n"
+            "Click **Confirm & Post** to broadcast, or **Cancel** to discard."
+        )
+
+        await interaction.followup.send(
+            content=preview_text,
+            embed=embed,
+            view=confirm_view,
+            ephemeral=True,
+        )
+
+    # ------------------------------------------------------------------
+    # /edit_say — edit a previously sent bot message
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="edit_say",
+        description="Edit a message previously sent by /say or /announcement.",
+    )
     @is_trusted_or_owner()
     @app_commands.describe(
         message_id="Message ID of the bot message to edit.",
-        new_content="New message content.",
+        new_content="Replacement content.",
     )
     async def edit_say(
         self,
@@ -317,41 +365,66 @@ class Utility(commands.Cog):
         message_id: str,
         new_content: str,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         try:
             message_id_int = int(message_id.strip())
         except ValueError:
-            await self._error(interaction, "message_id must be a Discord message ID.")
+            await interaction.followup.send(
+                "message_id must be a Discord message ID (numeric).", ephemeral=True
+            )
+            return
+
+        if not interaction.guild:
+            await interaction.followup.send(
+                "This command can only be used inside a server.", ephemeral=True
+            )
             return
 
         record = db.get_say_message(message_id_int)
         if not record or int(record["guild_id"]) != interaction.guild.id:
-            await self._error(interaction, "That message is not registered as a bot announcement in this server.")
+            await interaction.followup.send(
+                "That message is not registered as a bot announcement in this server.",
+                ephemeral=True,
+            )
             return
+
         if int(record["author_id"]) != interaction.user.id and not await self._authorized_override(interaction):
-            await self._error(interaction, "Only the staff member who created the announcement, the server owner, or bot owner can edit it.")
+            await interaction.followup.send(
+                "Only the staff member who created the announcement, the server owner, or bot owner can edit it.",
+                ephemeral=True,
+            )
             return
 
         channel = self.bot.get_channel(int(record["channel_id"]))
         if not isinstance(channel, discord.TextChannel):
             try:
                 fetched = await self.bot.fetch_channel(int(record["channel_id"]))
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                await self._error(interaction, "The original target channel is unavailable.")
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await interaction.followup.send(
+                    "The original target channel is unavailable.", ephemeral=True
+                )
                 return
             if not isinstance(fetched, discord.TextChannel):
-                await self._error(interaction, "The original target is not a text channel.")
+                await interaction.followup.send(
+                    "The original target is not a text channel.", ephemeral=True
+                )
                 return
             channel = fetched
 
         try:
             target = await channel.fetch_message(message_id_int)
             if target.author.id != self.bot.user.id:
-                await self._error(interaction, "That message is no longer authored by this bot.")
+                await interaction.followup.send(
+                    "That message is no longer authored by this bot.", ephemeral=True
+                )
                 return
             await target.edit(content=new_content[:2000])
-            await interaction.response.send_message("✅ Announcement edited.", ephemeral=True)
+            await interaction.followup.send("✅ Announcement edited.", ephemeral=True)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-            await self._error(interaction, f"Could not edit the message: {exc}")
+            await interaction.followup.send(
+                f"Could not edit the message: {exc}", ephemeral=True
+            )
 
     async def _authorized_override(self, interaction: discord.Interaction) -> bool:
         if not interaction.guild:

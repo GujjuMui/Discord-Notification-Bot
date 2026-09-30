@@ -159,6 +159,11 @@ class YouTubeTracker(commands.Cog):
         self.session: Optional[aiohttp.ClientSession] = None
         self._poll_lock = asyncio.Lock()
         self._missing_target_alerted: set[tuple[int, int]] = set()
+        # Tracks which (guild_id, yt_channel_id, target_id) combos have been
+        # warmed up this process lifetime. The warmup pass seeds the SQLite
+        # dedup cache with all currently-visible activity so that the very
+        # first real poll never re-sends historical videos.
+        self._warmed_up: set[tuple[str, str, str]] = set()
 
     async def cog_load(self) -> None:
         self.session = aiohttp.ClientSession(
@@ -174,6 +179,64 @@ class YouTubeTracker(commands.Cog):
             await self.session.close()
         self.session = None
 
+    async def _warmup_subscription(
+        self,
+        yt_channel_id: str,
+        activity: list[dict[str, Any]],
+        subscriptions: list[dict[str, Any]],
+    ) -> None:
+        """Seed the dedup cache for any subscription that has never been seen
+        this process lifetime. Runs silently — no Discord messages sent.
+
+        This is the fix for the historical-video spam: when the database cache
+        is empty (fresh install, DB reset, or channel re-added) the poller
+        would fire for all 15 RSS entries at once. The warmup marks every
+        currently-visible item as already-notified so only truly new content
+        (items that appear *after* the warmup) triggers a Discord message.
+        """
+        for subscription in subscriptions:
+            guild_id = str(subscription["guild_id"])
+            target_id = str(subscription["discord_target_channel_id"])
+            key = (guild_id, yt_channel_id, target_id)
+            if key in self._warmed_up:
+                continue
+
+            # Check whether this route already has cache entries. If the DB
+            # already has entries the bot ran before and the cache is intact —
+            # skip the warmup so we don't suppress legitimately new content.
+            already_cached = db.has_yt_content_been_notified(
+                int(guild_id),
+                yt_channel_id,
+                # Use a sentinel: if ANY item for this route is cached, the
+                # whole route is considered warm. We probe with the first item.
+                activity[0]["content_id"] if activity else "__probe__",
+                activity[0]["content_type"] if activity else "video",
+                int(target_id),
+            ) if activity else False
+
+            if not already_cached:
+                # Cache is empty for this route — seed it with everything
+                # currently visible so first real poll only fires on NEW items.
+                enabled = self._normalize_content_types(
+                    subscription.get("content_types")
+                )
+                for item in activity:
+                    if item["content_type"] in enabled:
+                        db.mark_yt_content_notified(
+                            int(guild_id),
+                            yt_channel_id,
+                            item["content_id"],
+                            item["content_type"],
+                            int(target_id),
+                        )
+                logger.info(
+                    "[Warmup] Seeded %d items for %s → channel %s (guild %s). "
+                    "No notifications sent — only future uploads will ping.",
+                    len(activity), yt_channel_id, target_id, guild_id,
+                )
+
+            self._warmed_up.add(key)
+
     @tasks.loop(seconds=60)
     async def poll_loop(self) -> None:
         async with self._poll_lock:
@@ -181,12 +244,23 @@ class YouTubeTracker(commands.Cog):
             grouped: dict[str, list[dict[str, Any]]] = {}
             for monitored in monitored_channels:
                 grouped.setdefault(monitored["yt_channel_id"], []).append(monitored)
+
             for yt_channel_id, subscriptions in grouped.items():
                 try:
                     activity = await self.fetch_channel_activity(yt_channel_id)
+
+                    # Run warmup before dispatch so first-ever poll never
+                    # re-sends historical videos.
+                    await self._warmup_subscription(
+                        yt_channel_id, activity, subscriptions
+                    )
+
                     await self._dispatch_activity(yt_channel_id, activity, subscriptions)
                 except Exception:
-                    logger.exception("Failed to process YouTube activity for channel %s", yt_channel_id)
+                    logger.exception(
+                        "Failed to process YouTube activity for channel %s",
+                        yt_channel_id,
+                    )
 
     @poll_loop.before_loop
     async def before_poll_loop(self) -> None:
@@ -834,7 +908,7 @@ class YouTubeTracker(commands.Cog):
         subscriptions: list[dict[str, Any]],
     ) -> None:
         if not activity:
-            logger.warning("No YouTube activity detected for %s", yt_channel_id)
+            logger.debug("No YouTube activity detected for %s", yt_channel_id)
             return
 
         for subscription in subscriptions:
@@ -847,10 +921,17 @@ class YouTubeTracker(commands.Cog):
                 item for item in activity
                 if item["content_type"] in enabled
             ]
+            # Sort newest-first and cap at 3 per poll cycle per content type.
+            # This prevents a burst of historical items from all firing at once
+            # if the warmup cache was bypassed or the DB was reset.
             route_items.sort(
                 key=lambda item: self._parse_datetime(item.get("published_at"))
-                or datetime.min.replace(tzinfo=timezone.utc)
+                or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
             )
+            # Keep at most 3 newest items total across all content types to
+            # limit blast radius on a cold cache restart.
+            route_items = route_items[:3]
 
             for item in route_items:
                 content_id = item["content_id"]
