@@ -1346,6 +1346,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     bot.tree.add_command(trust_group)
+
     @bot.tree.command(name="sync", description="Sync the global slash command tree immediately.")
     @is_trusted_or_owner()
     async def sync_commands(interaction: discord.Interaction) -> None:
@@ -1365,6 +1366,12 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             logger.exception("Manual slash command sync failed.")
             await interaction.followup.send(
                 f"❌ Discord rejected the command sync (HTTP {exc.status}). Try again later.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error during manual sync.")
+            await interaction.followup.send(
+                f"❌ Unexpected error: {exc}",
                 ephemeral=True,
             )
 
