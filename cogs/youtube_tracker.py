@@ -208,25 +208,37 @@ class YouTubeTracker(commands.Cog):
             if key in self._warmed_up:
                 continue
 
-            # Check whether this route already has cache entries. If the DB
-            # already has entries the bot ran before and the cache is intact —
-            # skip the warmup so we don't suppress legitimately new content.
-            already_cached = db.has_yt_content_been_notified(
-                int(guild_id),
-                yt_channel_id,
-                # Use a sentinel: if ANY item for this route is cached, the
-                # whole route is considered warm. We probe with the first item.
-                activity[0]["content_id"] if activity else "__probe__",
-                activity[0]["content_type"] if activity else "video",
-                int(target_id),
-            ) if activity else False
+            # Check whether this route already has cache entries. We count
+            # actual cached items for this route rather than probing a single
+            # item — the old single-item probe caused a false-positive if just
+            # the first activity item happened to be cached, leaving all other
+            # items unseeded and free to spam on the next poll.
+            if activity:
+                enabled = self._normalize_content_types(
+                    subscription.get("content_types")
+                )
+                eligible_ids = [
+                    item["content_id"]
+                    for item in activity
+                    if item["content_type"] in enabled
+                ]
+                # Count how many eligible items are already in the cache.
+                cached_count = sum(
+                    1 for cid in eligible_ids
+                    if db.has_yt_content_been_notified(
+                        int(guild_id), yt_channel_id, cid, "video", int(target_id)
+                    )
+                )
+                already_cached = cached_count > 0
+            else:
+                already_cached = False
+                enabled = self._normalize_content_types(
+                    subscription.get("content_types")
+                )
 
             if not already_cached:
                 # Cache is empty for this route — seed it with everything
                 # currently visible so first real poll only fires on NEW items.
-                enabled = self._normalize_content_types(
-                    subscription.get("content_types")
-                )
                 for item in activity:
                     if item["content_type"] in enabled:
                         db.mark_yt_content_notified(
@@ -1366,6 +1378,8 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     @bot.tree.command(name="botstatus", description="View the live bot health dashboard.")
     @is_trusted_or_owner()
     async def botstatus(interaction: discord.Interaction) -> None:
+        # Defer immediately — RSS health check can take up to HTTP_TIMEOUT seconds.
+        await interaction.response.defer(ephemeral=True)
         process = psutil.Process()
         memory_mb = process.memory_info().rss / (1024 * 1024)
         cpu_percent = psutil.cpu_percent(interval=None)
@@ -1401,7 +1415,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         embed.add_field(name="SQLite", value=f"Status: **{database_status}**\nMessages: **{database_messages:,}**\nYT feeds: **{feed_count:,}**\nSize: **{db_size_mb:.2f} MB**", inline=False)
         embed.add_field(name="External API", value=f"YouTube RSS: **{rss_status}**\nDiscord Gateway: **{gateway_status}**", inline=False)
         embed.set_footer(text="Admin / Trusted / Owner only")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
     @bot.tree.command(name="setup_logs", description="Create or map categorized server audit log channels.")

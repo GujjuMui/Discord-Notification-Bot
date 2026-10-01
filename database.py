@@ -24,6 +24,11 @@ class Database:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 30000")
+        # WAL mode allows concurrent readers alongside a writer, preventing
+        # "database is locked" errors when the async event loop fires multiple
+        # DB operations (message cache writes, poll dispatch, retention cleanup)
+        # close together.
+        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     @contextmanager
@@ -545,7 +550,7 @@ class Database:
                 row = cursor.execute("""
                     SELECT id, guild_id, yt_channel_id, yt_channel_name,
                            yt_channel_url, discord_target_channel_id, ping_role_id,
-                           content_types, last_video_id, created_at
+                           ping_user_ids, content_types, last_video_id, created_at
                     FROM yt_monitored_channels
                     WHERE guild_id = ?
                       AND yt_channel_id = ?
@@ -820,14 +825,23 @@ class Database:
         return counts
 
     def mark_message_deleted(self, message_id: int) -> Optional[Dict[str, Any]]:
-        data = self.get_cached_message(message_id)
-        if data:
-            with self._cursor() as cursor:
+        """Mark a message as deleted and return its cached content atomically."""
+        with self._cursor() as cursor:
+            # Fetch and update in a single connection to avoid TOCTOU race
+            # between two separate connection opens.
+            row = cursor.execute("""
+                SELECT message_id, guild_id, channel_id, author_id, author_tag,
+                       content, attachments, timestamp, deleted_at
+                FROM message_cache WHERE message_id = ?
+            """, (message_id,)).fetchone()
+            if row:
                 cursor.execute(
-                    "UPDATE message_cache SET deleted_at = CURRENT_TIMESTAMP WHERE message_id = ?",
+                    "UPDATE message_cache SET deleted_at = CURRENT_TIMESTAMP "
+                    "WHERE message_id = ?",
                     (message_id,),
                 )
-        return data
+                return self._decode_message(row)
+        return None
 
     # Legacy methods retained so existing video history remains compatible.
 

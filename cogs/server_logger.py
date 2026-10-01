@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -687,6 +688,9 @@ class ServerLogger(commands.Cog):
                     record = self._message_record(message)
                     db.cache_message(**record)
                     total += 1
+                # Small sleep between channels to avoid hitting Discord's
+                # rate limit when the bot is in a server with many channels.
+                await asyncio.sleep(0.5)
             except (discord.Forbidden, discord.HTTPException):
                 logger.warning(
                     "Could not warm message cache for #%s in guild %s",
@@ -822,7 +826,8 @@ class ServerLogger(commands.Cog):
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
     ) -> None:
-        if not before.guild or before.content == after.content:
+        # Skip bots, webhooks, and no-content-change edits (e.g. embed unfurl)
+        if not before.guild or before.author.bot or before.content == after.content:
             return
 
         record = self._message_record(after)
@@ -1045,7 +1050,7 @@ class ServerLogger(commands.Cog):
                 [
                     ("User", f"{after} ({after.id})", False),
                     ("Changes", " | ".join(changes) or "Profile updated", False),
-                    ("Avatar", avatar_links, True) if old_avatar != new_avatar else ("", "", True),
+                    *([("Avatar", avatar_links, True)] if old_avatar != new_avatar else []),
                 ],
                 thumbnail=new_avatar or old_avatar,
             )

@@ -81,6 +81,9 @@ class AnnouncementConfirmView(discord.ui.View):
     async def on_timeout(self) -> None:
         for child in self.children:
             child.disabled = True
+        # Note: we cannot edit the original message here because we don't have
+        # access to the interaction object after timeout. Discord will show the
+        # buttons as non-interactive once the view expires on the client side.
 
 
 # ---------------------------------------------------------------------------
