@@ -143,6 +143,16 @@ async def _send_command_error(
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=True)
+    except discord.NotFound:
+        # Interaction token expired (>3s elapsed) — log at debug, not error.
+        # This commonly happens when a check predicate does async I/O and the
+        # token expires before the error handler can respond.
+        logger.debug(
+            "Interaction token expired before error response could be sent "
+            "(command: %s, user: %s)",
+            getattr(interaction.command, "qualified_name", "unknown"),
+            interaction.user,
+        )
     except discord.HTTPException:
         logger.exception("Could not send application command error response.")
 

@@ -300,7 +300,8 @@ class ServerLogger(commands.Cog):
         candidate_ids: list[int] = []
         if settings:
             specific = settings.get(LOG_COLUMNS.get(log_type, ""))
-            if specific:
+            # Guard against 0 or None stored from legacy migrations
+            if specific and int(specific) > 0:
                 candidate_ids.append(int(specific))
 
             # General fallback: moderation log, then another configured log channel.
@@ -315,7 +316,8 @@ class ServerLogger(commands.Cog):
                 "voice_log_id",
             ):
                 value = settings.get(key)
-                if value and int(value) not in candidate_ids:
+                # Skip 0 or None values — these are unset/legacy placeholder rows
+                if value and int(value) > 0 and int(value) not in candidate_ids:
                     candidate_ids.append(int(value))
 
         for channel_id in candidate_ids:
@@ -331,7 +333,10 @@ class ServerLogger(commands.Cog):
                 self._missing_log_alerted.discard((guild_id, channel_id))
                 return channel
 
-        await self._notify_missing_log_channel(guild_id, 0)
+        # Only notify about missing channels if we actually had candidates to try.
+        # If candidate_ids is empty the guild simply hasn't set up logging yet.
+        if candidate_ids:
+            await self._notify_missing_log_channel(guild_id, 0)
         return None
 
     async def _notify_missing_log_channel(self, guild_id: int, channel_id: int) -> None:
