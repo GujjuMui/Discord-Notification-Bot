@@ -164,6 +164,13 @@ class YouTubeTracker(commands.Cog):
         # dedup cache with all currently-visible activity so that the very
         # first real poll never re-sends historical videos.
         self._warmed_up: set[tuple[str, str, str]] = set()
+        # Per-channel RSS failure tracking for exponential backoff.
+        # Maps yt_channel_id -> consecutive 404/error count.
+        # After N consecutive failures the channel is skipped for increasing
+        # numbers of poll cycles to avoid hammering a temporarily broken feed.
+        self._rss_fail_count: dict[str, int] = {}
+        self._rss_skip_until: dict[str, int] = {}  # poll cycle number to resume at
+        self._poll_cycle: int = 0
 
     async def cog_load(self) -> None:
         self.session = aiohttp.ClientSession(
@@ -240,14 +247,32 @@ class YouTubeTracker(commands.Cog):
     @tasks.loop(seconds=60)
     async def poll_loop(self) -> None:
         async with self._poll_lock:
+            self._poll_cycle += 1
             monitored_channels = db.get_yt_monitored_channels()
             grouped: dict[str, list[dict[str, Any]]] = {}
             for monitored in monitored_channels:
                 grouped.setdefault(monitored["yt_channel_id"], []).append(monitored)
 
             for yt_channel_id, subscriptions in grouped.items():
+                # Skip channels that are in backoff cooldown
+                skip_until = self._rss_skip_until.get(yt_channel_id, 0)
+                if self._poll_cycle < skip_until:
+                    logger.debug(
+                        "[Backoff] Skipping %s for %d more cycle(s).",
+                        yt_channel_id, skip_until - self._poll_cycle,
+                    )
+                    continue
+
                 try:
                     activity = await self.fetch_channel_activity(yt_channel_id)
+
+                    # Successful fetch — reset backoff counters
+                    if yt_channel_id in self._rss_fail_count:
+                        self._rss_fail_count.pop(yt_channel_id, None)
+                        self._rss_skip_until.pop(yt_channel_id, None)
+                        logger.info(
+                            "[Backoff] RSS feed recovered for %s.", yt_channel_id
+                        )
 
                     # Run warmup before dispatch so first-ever poll never
                     # re-sends historical videos.
@@ -256,10 +281,25 @@ class YouTubeTracker(commands.Cog):
                     )
 
                     await self._dispatch_activity(yt_channel_id, activity, subscriptions)
+                except aiohttp.ClientResponseError as exc:
+                    if exc.status == 404:
+                        fails = self._rss_fail_count.get(yt_channel_id, 0) + 1
+                        self._rss_fail_count[yt_channel_id] = fails
+                        # Exponential backoff: 1, 2, 4, 8, 16 cycles (max 16)
+                        skip_cycles = min(2 ** (fails - 1), 16)
+                        self._rss_skip_until[yt_channel_id] = self._poll_cycle + skip_cycles
+                        logger.warning(
+                            "[Backoff] RSS 404 for %s (fail #%d). "
+                            "Backing off for %d poll cycle(s).",
+                            yt_channel_id, fails, skip_cycles,
+                        )
+                    else:
+                        logger.exception(
+                            "Failed to process YouTube activity for channel %s", yt_channel_id
+                        )
                 except Exception:
                     logger.exception(
-                        "Failed to process YouTube activity for channel %s",
-                        yt_channel_id,
+                        "Failed to process YouTube activity for channel %s", yt_channel_id
                     )
 
     @poll_loop.before_loop
@@ -795,7 +835,12 @@ class YouTubeTracker(commands.Cog):
         return list(items.values())
 
     async def fetch_channel_activity(self, channel_id: str) -> list[dict[str, Any]]:
-        """Collect independent YouTube sources without letting one failure erase another."""
+        """Collect independent YouTube sources without letting one failure erase another.
+
+        RSS 404 errors are re-raised so the poll loop's exponential backoff
+        can skip this channel for increasing numbers of cycles rather than
+        hammering a temporarily broken feed every 5 minutes.
+        """
         source_items: dict[str, list[dict[str, Any]]] = {
             "rss": [], "shorts": [], "live": [], "community": []
         }
@@ -804,6 +849,9 @@ class YouTubeTracker(commands.Cog):
             source_items["rss"] = await self.fetch_feed(channel_id)
         except aiohttp.ClientResponseError as exc:
             logger.error("[YouTube Poller] RSS feed HTTP %s for %s", exc.status, channel_id)
+            if exc.status == 404:
+                # Re-raise 404 so poll_loop can apply exponential backoff.
+                raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             logger.error("[YouTube Poller] RSS feed request failed for %s: %s", channel_id, exc)
         except RuntimeError as exc:

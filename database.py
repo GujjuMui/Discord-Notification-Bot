@@ -573,27 +573,33 @@ class Database:
         content_type: str,
         discord_target_channel_id: Optional[int] = None,
     ) -> bool:
+        """Check if content_id has been notified for this route.
+
+        Deliberately ignores content_type in the lookup so that a video ID
+        that was previously sent as 'video' is not re-sent as 'short' (or
+        vice-versa) when YouTube's RSS feed returns a 404 and the scraper
+        reclassifies the same video_id under a different content type.
+        """
         with self._cursor() as cursor:
             if discord_target_channel_id is None:
                 row = cursor.execute("""
                     SELECT 1 FROM yt_content_cache
                     WHERE guild_id = ? AND yt_channel_id = ?
-                      AND content_id = ? AND content_type = ?
+                      AND content_id = ?
                     LIMIT 1
-                """, (str(guild_id), yt_channel_id, content_id, content_type)).fetchone()
+                """, (str(guild_id), yt_channel_id, content_id)).fetchone()
             else:
                 row = cursor.execute("""
                     SELECT 1 FROM yt_content_route_cache
                     WHERE guild_id = ? AND yt_channel_id = ?
                       AND discord_target_channel_id = ?
-                      AND content_id = ? AND content_type = ?
+                      AND content_id = ?
                     LIMIT 1
                 """, (
                     str(guild_id),
                     yt_channel_id,
                     str(discord_target_channel_id),
                     content_id,
-                    content_type,
                 )).fetchone()
             return row is not None
 
