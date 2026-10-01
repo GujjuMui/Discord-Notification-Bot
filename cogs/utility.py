@@ -338,10 +338,13 @@ class Utility(commands.Cog):
                 return
 
             embed_obj = discord.Embed(
-                title=(title or "")[:256] or None,
                 description=message,
                 color=embed_color,
             )
+            # Set title separately — avoids the (title or "")[:256] or None
+            # chain which can silently drop a valid title string.
+            if title:
+                embed_obj.title = title[:256]
             if image_url:
                 embed_obj.set_image(url=image_url)
             if footer:
