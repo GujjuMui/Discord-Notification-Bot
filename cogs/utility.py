@@ -22,11 +22,12 @@ class AnnouncementConfirmView(discord.ui.View):
 
     def __init__(
         self,
-        embed: discord.Embed,
+        embed: Optional[discord.Embed],
         content: str,
         target_channel: discord.TextChannel,
         allowed_mentions: discord.AllowedMentions,
         author_id: int,
+        view: Optional[discord.ui.View] = None,
     ):
         super().__init__(timeout=120)
         self._embed = embed
@@ -34,6 +35,7 @@ class AnnouncementConfirmView(discord.ui.View):
         self._target = target_channel
         self._allowed_mentions = allowed_mentions
         self._author_id = author_id
+        self._post_view = view  # link button view to attach on final post
         self.confirmed = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -53,6 +55,7 @@ class AnnouncementConfirmView(discord.ui.View):
             await self._target.send(
                 content=self._content or None,
                 embed=self._embed,
+                view=self._post_view,
                 allowed_mentions=self._allowed_mentions,
             )
             self.confirmed = True
@@ -215,27 +218,29 @@ class Utility(commands.Cog):
 
     @app_commands.command(
         name="announcement",
-        description="Create a rich announcement with a live preview before posting.",
+        description="Create an announcement with a live preview before posting.",
     )
     @is_trusted_or_owner()
     @app_commands.describe(
         target_channel="Channel to post the announcement in.",
-        title="Embed title.",
-        description="Main announcement body. Supports markdown and raw mentions.",
-        color="Hex color code, e.g. #FF0000 or 0x007AFF.",
+        message="Announcement text. Supports markdown and raw mentions.",
+        embed="Send as a rich Discord Embed (default: False — plain text).",
+        title="Embed title. Only used when embed=True.",
+        color="Hex color code, e.g. #FF0000. Only used when embed=True.",
         ping_role="Role or @everyone/@here to ping alongside the announcement.",
-        image_url="Optional image or GIF URL to display in the embed.",
-        footer="Optional footer text.",
-        button_label="Label for an optional link button.",
-        button_url="URL for the optional link button (must start with https://).",
-        anonymous="Hide the 'sent by' attribution in the footer. Default: true.",
+        image_url="Image/GIF URL (https:// only). Shown in embed when embed=True, or appended as link when embed=False.",
+        footer="Footer text. Only used when embed=True.",
+        button_label="Label for an optional link button. Only used when embed=True.",
+        button_url="URL for the optional link button (https:// only). Only used when embed=True.",
+        anonymous="Hide the 'sent by' footer attribution. Only used when embed=True.",
     )
     async def announcement(
         self,
         interaction: discord.Interaction,
         target_channel: discord.TextChannel,
-        title: str,
-        description: str,
+        message: str,
+        embed: bool = False,
+        title: Optional[str] = None,
         color: Optional[str] = None,
         ping_role: Optional[str] = None,
         image_url: Optional[str] = None,
@@ -252,30 +257,29 @@ class Utility(commands.Cog):
             )
             return
 
-        # Validate inputs
-        try:
-            embed_color = _parse_color(color)
-        except ValueError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-
+        # Validate URLs
         if button_url and not re.match(r"^https://", button_url, re.I):
             await interaction.followup.send(
-                "Button URL must start with `https://` (plain http:// is not accepted by Discord).",
-                ephemeral=True,
+                "Button URL must start with `https://`.", ephemeral=True
             )
             return
 
         if image_url and not re.match(r"^https://", image_url, re.I):
             await interaction.followup.send(
-                "Image URL must start with `https://`.",
-                ephemeral=True,
+                "Image URL must start with `https://`.", ephemeral=True
             )
             return
 
-        if len(description) > 4096:
+        # Length checks
+        if embed and len(message) > 4096:
             await interaction.followup.send(
                 "Description is over Discord's 4096-character embed limit.", ephemeral=True
+            )
+            return
+
+        if not embed and len(message) > 2000:
+            await interaction.followup.send(
+                "Message is over Discord's 2000-character limit.", ephemeral=True
             )
             return
 
@@ -288,7 +292,6 @@ class Utility(commands.Cog):
             elif raw in {"@here", "here"}:
                 ping_content = "@here"
             else:
-                # Try to resolve as a role mention or name
                 match = re.fullmatch(r"<@&?(\d{15,21})>", ping_role.strip())
                 if match:
                     ping_content = f"<@&{match.group(1)}>"
@@ -306,53 +309,68 @@ class Utility(commands.Cog):
                         )
                         return
 
-        # Build embed
-        embed = discord.Embed(
-            title=title[:256],
-            description=description,
-            color=embed_color,
-        )
-        if image_url:
-            embed.set_image(url=image_url)
-        if footer:
-            embed.set_footer(text=footer[:2048])
-        elif not anonymous:
-            embed.set_footer(
-                text=f"📢 Announcement by {interaction.user.display_name}"
-            )
-
-        # Optional link button
-        view = None
-        if button_url:
-            view = discord.ui.View(timeout=None)
-            view.add_item(
-                discord.ui.Button(
-                    label=(button_label or "Open Link")[:80],
-                    style=discord.ButtonStyle.link,
-                    url=button_url,
-                )
-            )
-
         allowed_mentions = _build_allowed_mentions(ping_content, ping_role)
+
+        # Build embed or plain content
+        embed_obj: Optional[discord.Embed] = None
+        view: Optional[discord.ui.View] = None
+        send_content = ping_content
+
+        if embed:
+            try:
+                embed_color = _parse_color(color)
+            except ValueError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
+
+            embed_obj = discord.Embed(
+                title=(title or "")[:256] or None,
+                description=message,
+                color=embed_color,
+            )
+            if image_url:
+                embed_obj.set_image(url=image_url)
+            if footer:
+                embed_obj.set_footer(text=footer[:2048])
+            elif not anonymous:
+                embed_obj.set_footer(
+                    text=f"📢 Announcement by {interaction.user.display_name}"
+                )
+            if button_url:
+                view = discord.ui.View(timeout=None)
+                view.add_item(
+                    discord.ui.Button(
+                        label=(button_label or "Open Link")[:80],
+                        style=discord.ButtonStyle.link,
+                        url=button_url,
+                    )
+                )
+        else:
+            # Plain text — append image URL as a link if provided
+            send_content = f"{ping_content}\n{message}".strip() if ping_content else message
+            if image_url:
+                send_content = f"{send_content}\n{image_url}".strip()
 
         # Build the preview confirm view
         confirm_view = AnnouncementConfirmView(
-            embed=embed,
-            content=ping_content,
+            embed=embed_obj,
+            content=send_content,
             target_channel=target_channel,
             allowed_mentions=allowed_mentions,
             author_id=interaction.user.id,
+            view=view,
         )
 
+        preview_label = "embed" if embed else "plain text"
         preview_text = (
-            f"**Preview of your announcement for {target_channel.mention}**\n"
+            f"**Preview of your {preview_label} announcement for {target_channel.mention}**\n"
             f"{'Pings: ' + ping_content if ping_content else 'No ping.'}\n\n"
             "Click **Confirm & Post** to broadcast, or **Cancel** to discard."
         )
 
         await interaction.followup.send(
             content=preview_text,
-            embed=embed,
+            embed=embed_obj,
             view=confirm_view,
             ephemeral=True,
         )
