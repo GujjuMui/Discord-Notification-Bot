@@ -52,12 +52,18 @@ class AnnouncementConfirmView(discord.ui.View):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
-            await self._target.send(
-                content=self._content or None,
-                embed=self._embed,
-                view=self._post_view,
-                allowed_mentions=self._allowed_mentions,
-            )
+            send_kwargs: dict = {
+                "content": self._content or None,
+                "allowed_mentions": self._allowed_mentions,
+            }
+            # Only include embed/view when they were actually built — passing
+            # None for either causes Discord to reject the request.
+            if self._embed is not None:
+                send_kwargs["embed"] = self._embed
+            if self._post_view is not None:
+                send_kwargs["view"] = self._post_view
+
+            await self._target.send(**send_kwargs)
             self.confirmed = True
             for child in self.children:
                 child.disabled = True
@@ -157,9 +163,17 @@ class Utility(commands.Cog):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        if not interaction.guild or not isinstance(interaction.channel, discord.TextChannel):
+        if not interaction.guild:
             await interaction.followup.send(
                 "This command can only be used in a server text channel.", ephemeral=True
+            )
+            return
+
+        # Guard against None channel — can happen in threads or DMs
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.followup.send(
+                "This command can only be used in a standard text channel (not threads or forums).",
+                ephemeral=True,
             )
             return
 
@@ -368,12 +382,28 @@ class Utility(commands.Cog):
             "Click **Confirm & Post** to broadcast, or **Cancel** to discard."
         )
 
-        await interaction.followup.send(
-            content=preview_text,
-            embed=embed_obj,
-            view=confirm_view,
-            ephemeral=True,
-        )
+        # Only pass embed to the preview when one was actually built.
+        # Passing embed=None to Discord's API causes a 400 error.
+        preview_kwargs: dict = {
+            "view": confirm_view,
+            "ephemeral": True,
+        }
+        if embed_obj is not None:
+            # Embed mode: show the embed + header text
+            preview_kwargs["content"] = preview_text
+            preview_kwargs["embed"] = embed_obj
+        else:
+            # Plain text mode: show the message content inline.
+            # Cap total content at 1950 chars to stay under Discord's 2000 limit.
+            preview_body = (
+                f"{preview_text}\n\n"
+                f"**Message:**\n{send_content}"
+            )
+            if len(preview_body) > 1950:
+                preview_body = preview_body[:1947] + "…"
+            preview_kwargs["content"] = preview_body
+
+        await interaction.followup.send(**preview_kwargs)
 
     # ------------------------------------------------------------------
     # /edit_say — edit a previously sent bot message
@@ -443,7 +473,8 @@ class Utility(commands.Cog):
 
         try:
             target = await channel.fetch_message(message_id_int)
-            if target.author.id != self.bot.user.id:
+            bot_user = self.bot.user
+            if bot_user is None or target.author.id != bot_user.id:
                 await interaction.followup.send(
                     "That message is no longer authored by this bot.", ephemeral=True
                 )
