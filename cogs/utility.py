@@ -259,9 +259,17 @@ class Utility(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        if button_url and not re.match(r"^https?://", button_url, re.I):
+        if button_url and not re.match(r"^https://", button_url, re.I):
             await interaction.followup.send(
-                "Button URL must start with http:// or https://.", ephemeral=True
+                "Button URL must start with `https://` (plain http:// is not accepted by Discord).",
+                ephemeral=True,
+            )
+            return
+
+        if image_url and not re.match(r"^https://", image_url, re.I):
+            await interaction.followup.send(
+                "Image URL must start with `https://`.",
+                ephemeral=True,
             )
             return
 

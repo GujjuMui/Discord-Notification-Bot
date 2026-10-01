@@ -11,10 +11,11 @@ import discord
 def format_mentions(text_content: str, guild: Optional[discord.Guild] = None) -> str:
     """Normalize Discord user/role/channel mention syntax and raw member IDs.
 
-    Existing Discord mentions are preserved. Raw numeric IDs are converted only
-    when they resolve to a guild member, preventing accidental channel/role IDs
-    from becoming user mentions. Basic @name/display-name input is also resolved
-    when a matching guild member is available.
+    Existing Discord mentions are preserved. Raw numeric IDs are converted ONLY
+    when they resolve to an actual guild member — preventing order numbers,
+    timestamps, or other 15-21 digit numbers from becoming user mentions.
+    Basic @name/display-name input is also resolved when a matching guild member
+    is available.
     """
     text = str(text_content or "")
     if guild is None:
@@ -22,7 +23,10 @@ def format_mentions(text_content: str, guild: Optional[discord.Guild] = None) ->
 
     def raw_id(match: re.Match[str]) -> str:
         value = int(match.group(1))
-        return f"<@{value}>"
+        # Only convert if the ID belongs to an actual guild member
+        if guild.get_member(value) is not None:
+            return f"<@{value}>"
+        return match.group(0)  # Leave unchanged if not a member
 
     text = re.sub(r"(?<![\d<@&])\b(\d{15,21})\b(?!\d)", raw_id, text)
 

@@ -57,6 +57,26 @@ CHANNEL_ID_PATTERNS = (
     re.compile(r"/channel/(UC[a-zA-Z0-9_-]{22})"),
 )
 
+# Allowlist of hostnames the bot is permitted to fetch.
+# This prevents SSRF attacks where a UC... channel ID is embedded in an
+# internal network URL, bypassing the domain check fast-path.
+_ALLOWED_FETCH_HOSTS = frozenset({
+    "www.youtube.com",
+    "youtube.com",
+    "m.youtube.com",
+    "img.youtube.com",
+    "i.ytimg.com",
+    "yt3.ggpht.com",
+    "yt3.googleusercontent.com",
+})
+
+# Regex that matches any Discord mention syntax so scraped YouTube content
+# cannot inject @everyone, @here, or arbitrary user/role pings.
+_MENTION_STRIP_RE = re.compile(
+    r"@(everyone|here)|<@[!&]?\d+>|<#\d+>|<@\d+>",
+    re.I,
+)
+
 
 async def user_is_authorized(interaction: discord.Interaction) -> bool:
     if not interaction.guild:
@@ -321,6 +341,12 @@ class YouTubeTracker(commands.Cog):
     async def _fetch(self, url: str) -> str:
         if not self.session or self.session.closed:
             raise RuntimeError("HTTP session is not available")
+        # SSRF guard: only allow fetches to known YouTube/Google CDN hostnames.
+        parsed_host = urlparse(url).hostname or ""
+        if parsed_host.lower() not in _ALLOWED_FETCH_HOSTS:
+            raise ValueError(
+                f"Blocked outbound fetch to disallowed host: {parsed_host!r}"
+            )
         async with self.session.get(url, allow_redirects=True) as response:
             response.raise_for_status()
             return await response.text()
@@ -1059,8 +1085,11 @@ class YouTubeTracker(commands.Cog):
             return False
 
         content_type = self._text(item.get("content_type")) or "video"
-        channel_name = self._text(item.get("channel_name")) or "YouTube"
-        title = self._text(item.get("title")) or "Untitled"
+        # Strip Discord mention syntax from scraped YouTube content to prevent
+        # channel names or video titles containing @everyone / <@role> from
+        # triggering actual pings inside the notification message.
+        channel_name = _MENTION_STRIP_RE.sub("", self._text(item.get("channel_name")) or "YouTube").strip() or "YouTube"
+        title = _MENTION_STRIP_RE.sub("", self._text(item.get("title")) or "Untitled").strip() or "Untitled"
         video_id = self._text(item.get("video_id") or item.get("content_id"))
         url = self._clean_url(item.get("video_url"))
         if not url and video_id:
@@ -1609,10 +1638,12 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
 
         value = url_or_id.strip()
         match = CHANNEL_ID_RE.search(value)
-        channel_id = match.group(0) if match else value
+
+        # Defer immediately regardless of path — both branches do DB ops and
+        # the URL-resolution branch does async network I/O.
+        await interaction.response.defer(ephemeral=True)
 
         if not match and value.startswith(("http://", "https://", "youtube.com", "www.youtube.com", "@")):
-            await interaction.response.defer(ephemeral=True)
             try:
                 channel_id = await tracker.resolve_channel_id(value)
             except Exception as exc:
@@ -1621,26 +1652,8 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                     ephemeral=True,
                 )
                 return
-
-            changed = db.remove_yt_monitored_channel(
-                interaction.guild.id,
-                channel_id,
-                target_channel.id if target_channel else None,
-            )
-            if target_channel:
-                message = (
-                    f"Removed **{channel_id}** from {target_channel.mention}."
-                    if changed
-                    else "That YouTube source is not subscribed to that Discord channel."
-                )
-            else:
-                message = (
-                    "Removed all Discord subscriptions for that YouTube source."
-                    if changed
-                    else "That YouTube source is not tracked in this server."
-                )
-            await interaction.followup.send(message, ephemeral=True)
-            return
+        else:
+            channel_id = match.group(0) if match else value
 
         changed = db.remove_yt_monitored_channel(
             interaction.guild.id,
@@ -1659,7 +1672,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 if changed
                 else "That YouTube source is not tracked in this server."
             )
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.followup.send(message, ephemeral=True)
 
     @bot.tree.command(name="list_yt", description="List tracked YouTube sources, destinations, and content filters.")
     @is_trusted_or_owner()

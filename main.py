@@ -69,9 +69,9 @@ intents.invites = True
 intents.emojis_and_stickers = True
 
 allowed_mentions = discord.AllowedMentions(
-    everyone=True,
-    roles=True,
-    users=True,
+    everyone=False,  # Never ping @everyone by default — elevate per call-site only
+    roles=False,     # Same for roles — prevents accidental mass pings
+    users=True,      # User mentions are safe by default (only pings specific users)
     replied_user=True,
 )
 

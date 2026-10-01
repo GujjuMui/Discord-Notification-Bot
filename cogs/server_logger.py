@@ -544,20 +544,20 @@ class ServerLogger(commands.Cog):
         if image:
             embed.set_image(url=image)
 
-        mention_content = f"<@{target_id}>" if target_id else None
+        # Audit log channels must never ping users, roles, or @everyone.
+        # The mention_content is kept for visual reference in the embed
+        # description, but AllowedMentions.none() ensures no actual pings fire.
         try:
             if file is None:
                 await channel.send(
-                    content=mention_content,
                     embed=embed,
-                    allowed_mentions=discord.AllowedMentions(users=bool(mention_content), roles=True, everyone=True, replied_user=True),
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await channel.send(
-                    content=mention_content,
                     embed=embed,
                     file=file,
-                    allowed_mentions=discord.AllowedMentions(users=bool(mention_content), roles=True, everyone=True, replied_user=True),
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             return True
         except (discord.Forbidden, discord.HTTPException):
