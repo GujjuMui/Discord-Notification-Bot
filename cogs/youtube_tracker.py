@@ -539,9 +539,20 @@ class YouTubeTracker(commands.Cog):
         if not webhook_url:
             return False
 
+        # Sanitize: strip trailing slashes/fragments so Google's strict URL
+        # validator doesn't reject with "Invalid parameter: hub.callback".
+        # Must be https://, no fragment, port in 80-90/440-450/1024-65535.
+        callback = webhook_url.rstrip("/").split("#")[0].strip()
+        if not callback.startswith("https://"):
+            logger.warning(
+                "[WebSub] WEBHOOK_URL must start with https:// — skipping subscribe for %s",
+                channel_id,
+            )
+            return False
+
         topic = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         payload = {
-            "hub.callback":      webhook_url,
+            "hub.callback":      callback,
             "hub.topic":         topic,
             "hub.mode":          "subscribe",
             "hub.lease_seconds": str(_LEASE_SECONDS),
@@ -577,9 +588,10 @@ class YouTubeTracker(commands.Cog):
         if not webhook_url:
             return False
 
+        callback = webhook_url.rstrip("/").split("#")[0].strip()
         topic = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         payload = {
-            "hub.callback": webhook_url,
+            "hub.callback": callback,
             "hub.topic":    topic,
             "hub.mode":     "unsubscribe",
             "hub.verify":   "async",
@@ -606,6 +618,12 @@ class YouTubeTracker(commands.Cog):
         webhook_url = getattr(config, "WEBHOOK_URL", None) or ""
         if not webhook_url:
             return
+
+        # On the very first run after startup, wait 15 seconds so Railway's
+        # reverse proxy and TLS termination are fully ready before sending
+        # subscribe requests to Google (avoids HTTP 400 on cold boot).
+        if self._poll_cycle == 0:
+            await asyncio.sleep(15)
 
         channels = db.get_channels_needing_resubscription(within_hours=24)
         if not channels:
@@ -1720,9 +1738,12 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             )
             return
 
+        # Defer first — DB read + embed build can exceed 3s on busy instances
+        await interaction.response.defer(ephemeral=True)
+
         channels = db.get_yt_monitored_channels(interaction.guild.id)
         if not channels:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "No YouTube channels are currently tracked in this server.", ephemeral=True
             )
             return
@@ -1761,7 +1782,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 value="\n".join(destinations)[:1024],
                 inline=False,
             )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /test_yt ──────────────────────────────────────────────────────
     @bot.tree.command(name="test_yt", description="Send a realistic YouTube notification preview.")
