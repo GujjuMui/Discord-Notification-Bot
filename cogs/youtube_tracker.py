@@ -288,8 +288,12 @@ class YouTubeTracker(commands.Cog):
                 "Set WEBHOOK_URL=https://your-domain.com/youtube/webhook in Railway."
             )
 
-        # Start background tasks — fallback RSS runs every 60s as safety net
-        self.poll_loop.change_interval(seconds=max(60, getattr(config, "FALLBACK_POLL_INTERVAL", 60)))
+        # Start background tasks
+        # poll_loop decorator is @tasks.loop(seconds=60) — interval is correct from startup.
+        # change_interval is still called to respect FALLBACK_POLL_INTERVAL env override.
+        interval = max(60, getattr(config, "FALLBACK_POLL_INTERVAL", 60))
+        if interval != 60:
+            self.poll_loop.change_interval(seconds=interval)
         self.poll_loop.start()
         self.resubscribe_loop.start()
 
@@ -654,15 +658,23 @@ class YouTubeTracker(commands.Cog):
     async def before_resubscribe_loop(self) -> None:
         await self.bot.wait_until_ready()
 
-    @tasks.loop(seconds=900)
+    @tasks.loop(seconds=60)
     async def poll_loop(self) -> None:
-        """Fallback RSS poll — catches any WebSub pushes Google failed to deliver."""
+        """Fallback RSS poll — catches any WebSub pushes Google failed to deliver.
+        Runs every 60 seconds. Interval can be overridden via FALLBACK_POLL_INTERVAL env var."""
         async with self._poll_lock:
             self._poll_cycle += 1
             monitored_channels = db.get_yt_monitored_channels()
+            if not monitored_channels:
+                return
             grouped: dict[str, list[dict[str, Any]]] = {}
             for monitored in monitored_channels:
                 grouped.setdefault(monitored["yt_channel_id"], []).append(monitored)
+
+            logger.debug(
+                "[RSS Fallback] Cycle #%d — checking %d channel(s).",
+                self._poll_cycle, len(grouped),
+            )
 
             for yt_channel_id, subscriptions in grouped.items():
                 skip_until = self._rss_skip_until.get(yt_channel_id, 0)
