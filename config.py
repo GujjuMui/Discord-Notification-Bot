@@ -60,13 +60,15 @@ except ValueError:
     WEBHOOK_PORT = 8080
 
 # FALLBACK_POLL_INTERVAL — seconds between RSS fallback polls.
-#                          Default 900 (15 min).  Only fires when a push was
-#                          missed; not the primary notification path.
-_fallback_raw = os.getenv("FALLBACK_POLL_INTERVAL", "900").strip()
+#                          Default 60s — runs every minute as an active safety
+#                          net alongside WebSub push. Catches any pushes Google
+#                          delays or fails to deliver.
+#                          Min: 60 (enforced in cog_load).
+_fallback_raw = os.getenv("FALLBACK_POLL_INTERVAL", "60").strip()
 try:
-    FALLBACK_POLL_INTERVAL: int = max(300, int(_fallback_raw))
+    FALLBACK_POLL_INTERVAL: int = max(60, int(_fallback_raw))
 except ValueError:
-    FALLBACK_POLL_INTERVAL = 900
+    FALLBACK_POLL_INTERVAL = 60
 
 
 def get_required_token() -> str:

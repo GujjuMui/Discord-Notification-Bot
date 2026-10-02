@@ -288,8 +288,8 @@ class YouTubeTracker(commands.Cog):
                 "Set WEBHOOK_URL=https://your-domain.com/youtube/webhook in Railway."
             )
 
-        # Start background tasks
-        self.poll_loop.change_interval(seconds=max(60, getattr(config, "FALLBACK_POLL_INTERVAL", 900)))
+        # Start background tasks — fallback RSS runs every 60s as safety net
+        self.poll_loop.change_interval(seconds=max(60, getattr(config, "FALLBACK_POLL_INTERVAL", 60)))
         self.poll_loop.start()
         self.resubscribe_loop.start()
 
@@ -380,7 +380,14 @@ class YouTubeTracker(commands.Cog):
             return aiohttp.web.Response(status=400)
 
         # Acknowledge immediately — Google retries if we don't respond fast.
-        asyncio.ensure_future(self._process_push_payload(body))
+        # Attach a done-callback so any unhandled exception inside
+        # _process_push_payload is logged rather than silently swallowed.
+        task = asyncio.ensure_future(self._process_push_payload(body))
+        task.add_done_callback(
+            lambda t: logger.exception(
+                "[WebSub] Unhandled error in push payload processor"
+            ) if not t.cancelled() and t.exception() else None
+        )
         return aiohttp.web.Response(status=204)
 
     async def _process_push_payload(self, body: bytes) -> None:
@@ -391,54 +398,53 @@ class YouTubeTracker(commands.Cog):
             logger.warning("[WebSub] XML parse error in push payload: %s", exc)
             return
 
-        # YouTube Atom push format:
-        # <feed>
-        #   <entry>
-        #     <yt:videoId>VIDEO_ID</yt:videoId>
-        #     <yt:channelId>CHANNEL_ID</yt:channelId>
-        #     <title>VIDEO TITLE</title>
-        #     <published>2024-01-01T00:00:00+00:00</published>
-        #   </entry>
-        # </feed>
-
         ns = {
             "atom": _ATOM_NS,
             "yt":   _YT_NS,
         }
 
         for entry in root.findall("atom:entry", ns):
-            video_id_el   = entry.find("yt:videoId", ns)
-            channel_id_el = entry.find("yt:channelId", ns)
-            title_el      = entry.find("atom:title", ns)
-            published_el  = entry.find("atom:published", ns)
+            try:
+                video_id_el   = entry.find("yt:videoId", ns)
+                channel_id_el = entry.find("yt:channelId", ns)
+                title_el      = entry.find("atom:title", ns)
+                published_el  = entry.find("atom:published", ns)
 
-            if video_id_el is None or channel_id_el is None:
-                continue
+                if video_id_el is None or channel_id_el is None:
+                    continue
 
-            video_id   = (video_id_el.text or "").strip()
-            channel_id = (channel_id_el.text or "").strip()
-            title      = (title_el.text if title_el is not None else "") or "Untitled"
-            published  = (published_el.text if published_el is not None else "") or None
+                video_id   = (video_id_el.text or "").strip()
+                channel_id = (channel_id_el.text or "").strip()
+                title      = (title_el.text if title_el is not None else "") or "Untitled"
+                published  = (published_el.text if published_el is not None else "") or None
 
-            if not video_id or not CHANNEL_ID_RE.fullmatch(channel_id):
-                continue
+                if not video_id or not CHANNEL_ID_RE.fullmatch(channel_id):
+                    continue
 
-            logger.info(
-                "[WebSub] Push received: video=%s channel=%s title=%r",
-                video_id, channel_id, title[:60],
-            )
+                logger.info(
+                    "[WebSub] Push received: video=%s channel=%s title=%r",
+                    video_id, channel_id, title[:60],
+                )
 
-            # Classify content type and fetch thumbnail in background
-            item = await self._classify_and_build_item(
-                video_id, channel_id, title, published
-            )
-            # Dispatch to all subscriptions for this channel
-            subscriptions = [
-                s for s in db.get_yt_monitored_channels()
-                if s["yt_channel_id"] == channel_id
-            ]
-            if subscriptions:
-                await self._dispatch_activity(channel_id, [item], subscriptions)
+                item = await self._classify_and_build_item(
+                    video_id, channel_id, title, published
+                )
+                subscriptions = [
+                    s for s in db.get_yt_monitored_channels()
+                    if s["yt_channel_id"] == channel_id
+                ]
+                if subscriptions:
+                    await self._dispatch_activity(channel_id, [item], subscriptions)
+                else:
+                    logger.warning(
+                        "[WebSub] Push received for untracked channel %s — ignoring.",
+                        channel_id,
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "[WebSub] Failed to process push entry (video=%s): %s",
+                    (video_id_el.text if video_id_el is not None else "?"), exc,
+                )
 
     # ------------------------------------------------------------------
     # Content classification via oEmbed
