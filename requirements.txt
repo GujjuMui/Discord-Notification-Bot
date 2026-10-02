@@ -1,5 +1,14 @@
-discord.py>=2.3,<3
+# Core Discord library
+discord.py>=2.7.0,<3
+
+# Async HTTP client — used for RSS fetches, WebSub subscriptions, oEmbed, thumbnails
 aiohttp>=3.9,<4
+
+# RSS/Atom feed parser — used for 60s fallback poller
 feedparser>=6.0,<7
+
+# Environment variable loading from .env
 python-dotenv>=1.0,<2
+
+# Process metrics for /botstatus (RAM, CPU)
 psutil>=5.9,<8

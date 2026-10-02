@@ -1,26 +1,45 @@
-# Secrets and local configuration
+# Secrets & credentials
 .env
+*.pem
+*.key
 
-# Runtime database
-youtube_bot.db
+# SQLite databases
 *.db
-*.sqlite
-*.sqlite3
+*.db-shm
+*.db-wal
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+.Python
+
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# IDE / OS
+# IDE / editor
 .vscode/
 .idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
 
-# Runtime logs
-logs/*.log
-logs/*.log.*
+# Logs
+logs/
+*.log
+
+# Build / dist
+dist/
+build/
+*.egg-info/
+
+# Railway / Docker
+.railway/
+
+# Cursor AI
+.cursor/
