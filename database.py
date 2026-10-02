@@ -278,6 +278,25 @@ class Database:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_yt_monitored_channel ON yt_monitored_channels(yt_channel_id)"
             )
+            # WebSub lease tracking — add lease_expires_at if the column is missing
+            # (handles existing deployments that predate this migration).
+            yt_cols_current = {
+                row["name"]
+                for row in cursor.execute(
+                    "PRAGMA table_info(yt_monitored_channels)"
+                ).fetchall()
+            }
+            if "lease_expires_at" not in yt_cols_current:
+                cursor.execute(
+                    "ALTER TABLE yt_monitored_channels "
+                    "ADD COLUMN lease_expires_at TIMESTAMP"
+                )
+            if "websub_verified" not in yt_cols_current:
+                cursor.execute(
+                    "ALTER TABLE yt_monitored_channels "
+                    "ADD COLUMN websub_verified INTEGER NOT NULL DEFAULT 0"
+                )
+
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS yt_content_cache (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -636,6 +655,37 @@ class Database:
                 content_type,
             ))
             return cursor.rowcount > 0
+
+    def update_yt_websub_lease(
+        self,
+        yt_channel_id: str,
+        lease_expires_at: str,
+        verified: bool = True,
+    ) -> bool:
+        """Update WebSub lease expiration for all subscriptions of a channel."""
+        with self._cursor() as cursor:
+            cursor.execute("""
+                UPDATE yt_monitored_channels
+                SET lease_expires_at = ?,
+                    websub_verified = ?
+                WHERE yt_channel_id = ?
+            """, (lease_expires_at, 1 if verified else 0, yt_channel_id))
+            return cursor.rowcount > 0
+
+    def get_channels_needing_resubscription(self, within_hours: int = 24) -> List[Dict[str, Any]]:
+        """Return distinct yt_channel_ids whose WebSub lease expires within `within_hours`
+        or that have never been subscribed (lease_expires_at IS NULL)."""
+        with self._cursor() as cursor:
+            rows = cursor.execute("""
+                SELECT DISTINCT yt_channel_id
+                FROM yt_monitored_channels
+                WHERE CAST(discord_target_channel_id AS INTEGER) > 0
+                  AND (
+                    lease_expires_at IS NULL
+                    OR datetime(lease_expires_at) <= datetime('now', ?)
+                  )
+            """, (f"+{within_hours} hours",)).fetchall()
+            return [dict(row) for row in rows]
 
     def update_yt_last_video(
         self,

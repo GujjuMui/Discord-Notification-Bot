@@ -41,6 +41,33 @@ except ValueError:
 HTTP_TIMEOUT = 20
 BOT_PREFIX = "!"
 
+# ---------------------------------------------------------------------------
+# WebSub (PubSubHubbub) push engine
+# ---------------------------------------------------------------------------
+# WEBHOOK_URL  — the publicly-reachable URL Google will POST push notifications
+#                to.  Must end with /youtube/webhook.
+#                e.g. https://your-railway-app.up.railway.app/youtube/webhook
+#                Leave empty (default) to run in RSS-fallback-only mode.
+WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "").strip()
+
+# WEBHOOK_PORT — the TCP port the embedded aiohttp webhook server listens on.
+#                Railway maps this automatically when you expose a port.
+#                Default 8080 — matches Railway's default HTTP port.
+_webhook_port_raw = os.getenv("WEBHOOK_PORT", "8080").strip()
+try:
+    WEBHOOK_PORT: int = int(_webhook_port_raw)
+except ValueError:
+    WEBHOOK_PORT = 8080
+
+# FALLBACK_POLL_INTERVAL — seconds between RSS fallback polls.
+#                          Default 900 (15 min).  Only fires when a push was
+#                          missed; not the primary notification path.
+_fallback_raw = os.getenv("FALLBACK_POLL_INTERVAL", "900").strip()
+try:
+    FALLBACK_POLL_INTERVAL: int = max(300, int(_fallback_raw))
+except ValueError:
+    FALLBACK_POLL_INTERVAL = 900
+
 
 def get_required_token() -> str:
     token = (DISCORD_BOT_TOKEN or "").strip()

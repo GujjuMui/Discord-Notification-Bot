@@ -55,7 +55,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "2.3.0"
+BOT_VERSION = "3.0.0"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
@@ -235,6 +235,7 @@ async def on_ready() -> None:
         f"│ 🤖 DISCORD.PY VERSION: {discord_py_version}",
         f"│ 📊 SERVERS CONNECTED: {len(bot.guilds)} | USERS: {user_count}",
         f"│ 💾 DATABASE: {db_status} | STATUS: Online & Ready",
+        f"│ 📡 WEBSUB: {'Active (' + config.WEBHOOK_URL[:40] + '...)' if config.WEBHOOK_URL else 'RSS fallback only (set WEBHOOK_URL to enable)'}",
         f"│ 🕒 START TIME: {start_text}",
         "└─────────────────────────────────────────────────────────────┘",
     ]
