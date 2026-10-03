@@ -41,15 +41,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CHANNEL_ID_RE = re.compile(r"UC[a-zA-Z0-9_-]{22}")
+
+# Pattern order matters — most specific / least ambiguous first.
+#
+# "externalId" is YouTube's internal canonical identifier for the page owner.
+# It appears once per page and always matches the channel you navigated to.
+#
+# <meta itemprop="channelId"> is the HTML canonical tag — equally reliable.
+#
+# "channelId" in JSON is dangerous: it appears in many places including
+# related/connected brand accounts, autoplay suggestions, and sidebars.
+# It must be checked LAST to avoid mapping @handle → wrong channel.
 CHANNEL_ID_PATTERNS = (
-    re.compile(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"'),
+    # Most reliable — appears exactly once, always the page owner
     re.compile(r'"externalId":"(UC[a-zA-Z0-9_-]{22})"'),
+    # HTML canonical meta tag — equally reliable
     re.compile(
         r'<meta[^>]+itemprop=["\']channelId["\'][^>]+content=["\']'
         r'(UC[a-zA-Z0-9_-]{22})["\']',
         re.I,
     ),
-    re.compile(r"/channel/(UC[a-zA-Z0-9_-]{22})"),
+    re.compile(
+        r'<meta[^>]+content=["\'](UC[a-zA-Z0-9_-]{22})["\'][^>]+'
+        r'itemprop=["\']channelId["\']',
+        re.I,
+    ),
+    # og:url canonical link — reliable for /channel/ URLs
+    re.compile(r'"canonicalBaseUrl":"/@?[^"]*".*?"externalId":"(UC[a-zA-Z0-9_-]{22})"'),
+    # Direct /channel/ path in URL — reliable when present
+    re.compile(r'["\']https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]{22})["\']'),
+    # Last resort — generic channelId JSON key (can match connected accounts)
+    re.compile(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"'),
 )
 
 _ALLOWED_FETCH_HOSTS = frozenset({
@@ -737,27 +759,89 @@ class YouTubeTracker(commands.Cog):
             response.raise_for_status()
             return await response.text()
 
-    async def resolve_channel_id(self, url: str) -> str:
+    async def resolve_channel_id(self, url: str) -> tuple[str, str]:
+        """Resolve any YouTube URL/handle to a (channel_id, channel_name) tuple.
+
+        Resolution priority (most → least reliable):
+        1. UC... ID already present in the URL — return immediately, no fetch.
+        2. Fetch the page; read externalId / itemprop=channelId from the HTML
+           of the FINAL page after redirects (handles @handle, /c/, /user/ etc).
+        3. Validate the resolved ID by confirming the RSS feed is reachable.
+
+        Returns (channel_id, channel_name).
+        Raises ValueError if resolution fails.
+        """
         normalized = url.strip()
+        # Accept bare handles like @KingsiedGamer
+        if normalized.startswith("@") and not normalized.startswith("http"):
+            normalized = "https://www.youtube.com/" + normalized
         if not normalized.startswith(("http://", "https://")):
             normalized = "https://" + normalized
 
+        # Fast path — UC... already in the URL
         match = CHANNEL_ID_RE.search(normalized)
         if match:
-            return match.group(0)
+            channel_id = match.group(0)
+            logger.info(
+                "[Resolver] UC... ID found directly in URL: %s → %s",
+                url, channel_id,
+            )
+            name = await self.fetch_channel_name(channel_id)
+            return channel_id, name or channel_id
 
         parsed = urlparse(normalized)
         if parsed.netloc.lower() not in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
             raise ValueError("Please provide a valid youtube.com channel URL.")
 
-        html = await self._fetch(normalized)
-        for pattern in CHANNEL_ID_PATTERNS:
+        logger.info("[Resolver] Fetching page for URL: %s", normalized)
+
+        # Fetch the channel page, following all redirects.
+        # We track the FINAL URL after redirects so we can extract the
+        # channel ID from the page Google actually served us — not an
+        # intermediate brand-account redirect page.
+        if not self.session or self.session.closed:
+            raise RuntimeError("HTTP session is not available")
+
+        final_url = normalized
+        try:
+            async with self.session.get(
+                normalized,
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=config.HTTP_TIMEOUT),
+            ) as response:
+                response.raise_for_status()
+                html = await response.text()
+                final_url = str(response.url)
+        except aiohttp.ClientError as exc:
+            raise ValueError(f"Could not fetch YouTube page: {exc}") from exc
+
+        logger.info("[Resolver] Final URL after redirects: %s", final_url)
+
+        # Try to extract UC... from the final URL first (most reliable)
+        match = CHANNEL_ID_RE.search(final_url)
+        if match:
+            channel_id = match.group(0)
+            logger.info(
+                "[Resolver] UC... ID extracted from final URL: %s", channel_id
+            )
+            name = self._channel_name_from_html(html) or await self.fetch_channel_name(channel_id)
+            return channel_id, name or channel_id
+
+        # Scan HTML with patterns ordered most→least reliable
+        for i, pattern in enumerate(CHANNEL_ID_PATTERNS):
             match = pattern.search(html)
             if match:
-                return match.group(1)
+                channel_id = match.group(1)
+                name = self._channel_name_from_html(html) or await self.fetch_channel_name(channel_id)
+                logger.info(
+                    "[Resolver] UC... ID found via pattern #%d (%s): %s → %s (%s)",
+                    i, pattern.pattern[:40], url, channel_id, name,
+                )
+                return channel_id, name or channel_id
 
         raise ValueError(
-            "Could not find the channel ID. Try a full /channel/UC... URL."
+            "Could not find the channel ID. "
+            "Try using the full /channel/UC... URL directly."
         )
 
     @staticmethod
@@ -1258,7 +1342,7 @@ class YouTubeTracker(commands.Cog):
         content_types: str = "all",
         channel_name_override: Optional[str] = None,
     ) -> dict[str, Any]:
-        channel_id = await self.resolve_channel_id(url)
+        channel_id, resolved_name = await self.resolve_channel_id(url)
         feed_items = await self.fetch_feed(channel_id)
 
         detected_name = next(
@@ -1270,7 +1354,8 @@ class YouTubeTracker(commands.Cog):
             ),
             None,
         )
-        channel_name = self._text(channel_name_override) or detected_name
+        # Priority: explicit override > RSS feed name > resolver name > page scrape
+        channel_name = self._text(channel_name_override) or detected_name or resolved_name
         if not channel_name:
             channel_name = await self.fetch_channel_name(channel_id)
         if not channel_name:
@@ -1718,7 +1803,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
         match = CHANNEL_ID_RE.search(value)
         if not match and value.startswith(("http://", "https://", "youtube.com", "www.youtube.com", "@")):
             try:
-                channel_id = await tracker.resolve_channel_id(value)
+                channel_id, _ = await tracker.resolve_channel_id(value)
             except Exception as exc:
                 await interaction.followup.send(
                     f"Could not resolve that YouTube URL: {exc}", ephemeral=True
@@ -1890,9 +1975,8 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     async def ytinfo(interaction: discord.Interaction, url: str) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
-            channel_id = await tracker.resolve_channel_id(url)
+            channel_id, name = await tracker.resolve_channel_id(url)
             videos     = await tracker.fetch_feed(channel_id)
-            name       = next((v["channel_name"] for v in videos if v["channel_name"]), channel_id)
             webhook_url = getattr(config, "WEBHOOK_URL", None) or ""
             push_line   = (
                 f"\nWebSub push: 🟢 configured (`{webhook_url[:60]}...`)"
