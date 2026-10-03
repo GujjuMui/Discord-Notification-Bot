@@ -447,6 +447,20 @@ class YouTubeTracker(commands.Cog):
                 if not video_id or not CHANNEL_ID_RE.fullmatch(channel_id):
                     continue
 
+                # Guard: only process pushes for channels we actually track.
+                # This prevents connected/alternate brand-account pushes from
+                # being classified (wasting an oEmbed call) and dispatched.
+                subscriptions = [
+                    s for s in db.get_yt_monitored_channels()
+                    if s["yt_channel_id"] == channel_id
+                ]
+                if not subscriptions:
+                    logger.warning(
+                        "[WebSub] Push received for untracked channel %s (video=%s) — ignoring.",
+                        channel_id, video_id,
+                    )
+                    continue
+
                 logger.info(
                     "[WebSub] Push received: video=%s channel=%s title=%r",
                     video_id, channel_id, title[:60],
@@ -455,17 +469,7 @@ class YouTubeTracker(commands.Cog):
                 item = await self._classify_and_build_item(
                     video_id, channel_id, title, published
                 )
-                subscriptions = [
-                    s for s in db.get_yt_monitored_channels()
-                    if s["yt_channel_id"] == channel_id
-                ]
-                if subscriptions:
-                    await self._dispatch_activity(channel_id, [item], subscriptions)
-                else:
-                    logger.warning(
-                        "[WebSub] Push received for untracked channel %s — ignoring.",
-                        channel_id,
-                    )
+                await self._dispatch_activity(channel_id, [item], subscriptions)
             except Exception as exc:
                 logger.exception(
                     "[WebSub] Failed to process push entry (video=%s): %s",

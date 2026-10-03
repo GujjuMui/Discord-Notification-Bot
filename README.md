@@ -2,7 +2,7 @@
 
 A production-grade Discord bot for **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, with a 60-second RSS fallback safety net and full categorized server audit logging across 8 dedicated channels.
 
-**Version:** 3.0.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
+**Version:** 3.1.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
 
 ---
 
@@ -16,6 +16,9 @@ Google WebSub Hub  ──POST──▶  aiohttp.web /youtube/webhook
       │                              │
       │                    _process_push_payload()
       │                              │
+      │              Guard: channel_id tracked?
+      │              No → reject (connected accounts)
+      │              Yes ↓
       │                    oEmbed classification
       │                    (video / short / live)
       │                              │
@@ -232,6 +235,12 @@ Log channel registrations **auto-restore** after Railway redeploys — the bot s
 ---
 
 ## Changelog
+
+### v3.1.0
+- **Channel resolver fix** — `CHANNEL_ID_PATTERNS` reordered so `externalId` and `itemprop=channelId` are checked before the generic `channelId` JSON key, preventing connected brand accounts from hijacking the resolved channel ID
+- **WebSub push guard** — push handler now rejects untracked `<yt:channelId>` values before classification, blocking connected account notifications entirely
+- `resolve_channel_id` returns `(channel_id, name)` tuple with pattern-index logging for easier future diagnosis
+- `DESIGN.md` fully rewritten to reflect v3.x architecture
 
 ### v3.0.0
 - **Full WebSub (PubSubHubbub) push engine** — replaced all HTML scrapers with Google's official push notification system

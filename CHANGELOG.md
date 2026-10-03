@@ -5,6 +5,18 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.1.0] — 2026-10-03
+
+### Fixed
+- **Channel resolver mapping to connected brand accounts** — Reordered `CHANNEL_ID_PATTERNS` so `externalId` and `itemprop=channelId` are checked before the generic `"channelId":"UC..."` JSON key, which could previously match a connected alternate channel before reaching the page owner's ID (e.g. `@kingsiedgamer` resolving to `kingsied` instead of the main channel)
+- **WebSub push handler dispatching connected account videos** — Guard check now rejects pushes whose `<yt:channelId>` is not in the tracked channel list *before* calling `_classify_and_build_item`, preventing stray oEmbed calls and notifications for connected brand accounts
+
+### Changed
+- `resolve_channel_id` now returns `tuple[str, str]` (`channel_id`, `channel_name`) with pattern-index logging for future diagnosis — all three callers (`add_channel`, `remove_yt`, `ytinfo`) updated
+- `DESIGN.md` fully rewritten to reflect v3.x WebSub architecture (previous doc described v1.0 polling design)
+
+---
+
 ## [3.0.0] — 2026-10-02
 
 ### Added
