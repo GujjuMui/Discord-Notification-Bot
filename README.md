@@ -2,7 +2,7 @@
 
 A production-grade Discord bot for **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, with a 60-second RSS fallback safety net and full categorized server audit logging across 8 dedicated channels.
 
-**Version:** 3.1.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
+**Version:** 3.1.1 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
 
 ---
 

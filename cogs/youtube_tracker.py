@@ -1278,32 +1278,65 @@ class YouTubeTracker(commands.Cog):
         watch_line = f"Watch here: <{url}>"
         msg_content = "\n".join([header_message, watch_line, *ping_parts]).strip()
 
-        try:
-            await channel.send(
-                content=msg_content,
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=True,
-                    roles=bool(ping_role_id),
-                    users=bool(ping_user_ids),
-                    replied_user=True,
-                ),
-            )
-            if guild_id is not None:
-                self._missing_target_alerted.discard((guild_id, discord_channel_id))
-            logger.info(
-                "Sent YouTube %s notification for %s",
-                content_type, video_id or item.get("content_id"),
-            )
-            return True
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            logger.error(
-                "Failed to send YouTube %s notification for %s: %s",
-                content_type, video_id or item.get("content_id"), exc,
-            )
-            if guild_id is not None and isinstance(exc, discord.Forbidden):
-                await self._notify_missing_target(guild_id, discord_channel_id)
-            return False
+        # Retry up to 3 times on 429 rate-limit responses, with backoff.
+        # discord.py raises HTTPException with status=429 when Cloudflare or
+        # Discord's own rate-limiter fires. We wait retry_after seconds if the
+        # header is present, otherwise fall back to 5/10/20s.
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                await channel.send(
+                    content=msg_content,
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(
+                        everyone=True,
+                        roles=bool(ping_role_id),
+                        users=bool(ping_user_ids),
+                        replied_user=True,
+                    ),
+                )
+                if guild_id is not None:
+                    self._missing_target_alerted.discard((guild_id, discord_channel_id))
+                logger.info(
+                    "Sent YouTube %s notification for %s",
+                    content_type, video_id or item.get("content_id"),
+                )
+                return True
+            except discord.HTTPException as exc:
+                last_exc = exc
+                if exc.status == 429:
+                    retry_after = getattr(exc, "retry_after", None)
+                    wait = float(retry_after) if retry_after else 5.0 * (2 ** attempt)
+                    logger.warning(
+                        "Discord 429 on notification for %s (attempt %d/3) — waiting %.1fs",
+                        video_id or item.get("content_id"), attempt + 1, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                # Non-429 HTTP error — log and bail immediately
+                logger.error(
+                    "Failed to send YouTube %s notification for %s: %s",
+                    content_type, video_id or item.get("content_id"), exc,
+                )
+                if guild_id is not None and isinstance(exc, discord.Forbidden):
+                    await self._notify_missing_target(guild_id, discord_channel_id)
+                return False
+            except discord.Forbidden as exc:
+                last_exc = exc
+                logger.error(
+                    "Failed to send YouTube %s notification for %s: %s",
+                    content_type, video_id or item.get("content_id"), exc,
+                )
+                if guild_id is not None:
+                    await self._notify_missing_target(guild_id, discord_channel_id)
+                return False
+
+        # All 3 attempts exhausted on 429
+        logger.error(
+            "Failed to send YouTube %s notification for %s after 3 attempts (429 rate limit): %s",
+            content_type, video_id or item.get("content_id"), last_exc,
+        )
+        return False
 
     async def _notify_missing_target(self, guild_id: int, channel_id: int) -> None:
         key = (guild_id, channel_id)

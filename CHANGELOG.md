@@ -5,6 +5,13 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.1.1] — 2026-10-10
+
+### Fixed
+- **Discord 429 rate-limit drops notifications** — `_send_notification` now retries up to 3 times on HTTP 429 responses with exponential backoff (5s/10s/20s, or Discord's own `retry_after` header if present). Previously a single 429 would silently drop the notification — it would not be marked as sent, and the next RSS poll would retry, but repeated 429s could mean the notification was never delivered. The bot now waits and retries within the same send attempt.
+
+---
+
 ## [3.1.0] — 2026-10-03
 
 ### Fixed
