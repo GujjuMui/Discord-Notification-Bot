@@ -5,6 +5,19 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.1.2] — 2026-10-10
+
+### Security
+- **WebSub challenge validation** — `hub.challenge` now validated for length (≤512 chars) and printability before echoing; rejects oversized or non-printable strings that could cause memory abuse
+- **WebSub push body size cap** — POST payloads over 512 KB are rejected with HTTP 413 before XML parsing; prevents memory exhaustion from crafted large payloads
+- **Safe `hub.lease_seconds` parse** — wrapped in `try/except` with fallback to `_LEASE_SECONDS`; a malformed value no longer crashes the verification handler
+- **`table_counts()` allowlist guard** — table names validated against a `frozenset` before interpolation into SQL; prevents accidental injection if the list is ever extended
+
+### Fixed
+- **`poll_loop` and `resubscribe_loop` no longer terminate on unhandled exceptions** — added `@poll_loop.error` and `@resubscribe_loop.error` handlers; previously an unexpected error in the outer loop body would cause `discord.ext.tasks` to cancel the loop permanently and silently stop all YouTube notifications
+
+---
+
 ## [3.1.1] — 2026-10-10
 
 ### Fixed

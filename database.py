@@ -865,11 +865,17 @@ class Database:
             "say_messages",
             "message_cache",
         )
+        # Allowlist guard — table names are hardcoded constants but we validate
+        # them anyway to prevent accidental f-string injection if this list
+        # is ever expanded with a user-influenced value.
+        _allowed = frozenset(tables)
         counts: Dict[str, int] = {}
         with self._cursor() as cursor:
             for table in tables:
+                if table not in _allowed:
+                    continue
                 row = cursor.execute(
-                    f"SELECT COUNT(*) AS count FROM {table}"
+                    f"SELECT COUNT(*) AS count FROM {table}"  # noqa: S608 — name is allowlisted
                 ).fetchone()
                 counts[table] = int(row["count"])
         return counts

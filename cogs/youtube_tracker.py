@@ -370,7 +370,20 @@ class YouTubeTracker(commands.Cog):
         mode      = params.get("hub.mode", "")
         challenge = params.get("hub.challenge", "")
         topic     = params.get("hub.topic", "")
-        lease_sec = int(params.get("hub.lease_seconds", _LEASE_SECONDS))
+
+        # Guard: challenge must be a short alphanumeric token (Google uses ~20 chars).
+        # Reject oversized or non-printable challenge strings to prevent memory abuse.
+        if not challenge or len(challenge) > 512 or not challenge.isprintable():
+            logger.warning("[WebSub] Bad verification challenge: length=%d", len(challenge))
+            return aiohttp.web.Response(status=400, text="bad request")
+
+        # Guard: parse lease_seconds safely — a malformed request must not crash handler.
+        try:
+            lease_sec = int(params.get("hub.lease_seconds", _LEASE_SECONDS))
+            if lease_sec <= 0:
+                lease_sec = _LEASE_SECONDS
+        except (ValueError, TypeError):
+            lease_sec = _LEASE_SECONDS
 
         if mode not in ("subscribe", "unsubscribe") or not challenge:
             logger.warning("[WebSub] Bad verification request: mode=%r topic=%r", mode, topic)
@@ -399,11 +412,20 @@ class YouTubeTracker(commands.Cog):
         self, request: aiohttp.web.Request
     ) -> aiohttp.web.Response:
         """Handle incoming Atom push notification (POST) from Google."""
+        # Cap body at 512 KB — a legitimate YouTube Atom push is under 10 KB.
+        # Reject oversized payloads early to prevent memory exhaustion.
+        _MAX_BODY = 512 * 1024
         try:
             body = await request.read()
         except Exception as exc:
             logger.warning("[WebSub] Could not read push body: %s", exc)
             return aiohttp.web.Response(status=400)
+
+        if len(body) > _MAX_BODY:
+            logger.warning(
+                "[WebSub] Push payload too large (%d bytes) — rejecting.", len(body)
+            )
+            return aiohttp.web.Response(status=413)
 
         # Acknowledge immediately — Google retries if we don't respond fast.
         # Attach a done-callback so any unhandled exception inside
@@ -684,6 +706,10 @@ class YouTubeTracker(commands.Cog):
     async def before_resubscribe_loop(self) -> None:
         await self.bot.wait_until_ready()
 
+    @resubscribe_loop.error
+    async def resubscribe_loop_error(self, error: Exception) -> None:
+        logger.exception("[WebSub] Unhandled error in resubscribe_loop — loop will continue: %s", error)
+
     @tasks.loop(seconds=60)
     async def poll_loop(self) -> None:
         """Fallback RSS poll — catches any WebSub pushes Google failed to deliver.
@@ -746,6 +772,10 @@ class YouTubeTracker(commands.Cog):
     @poll_loop.before_loop
     async def before_poll_loop(self) -> None:
         await self.bot.wait_until_ready()
+
+    @poll_loop.error
+    async def poll_loop_error(self, error: Exception) -> None:
+        logger.exception("[RSS Fallback] Unhandled error in poll_loop — loop will continue: %s", error)
 
     # ------------------------------------------------------------------
     # HTTP helpers
