@@ -17,6 +17,7 @@ import config
 from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
 from cogs.utility import Utility
+from cogs.moderation import Moderation
 from utils.helpers import format_mentions
 
 LOG_DIR = config.PROJECT_ROOT / "logs"
@@ -55,7 +56,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "3.1.2"
+BOT_VERSION = "3.2.0"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
@@ -122,6 +123,9 @@ async def setup_bot() -> None:
 
     utility = Utility(bot)
     await bot.add_cog(utility)
+
+    moderation = Moderation(bot)
+    await bot.add_cog(moderation)
 
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")
@@ -243,7 +247,7 @@ async def on_ready() -> None:
 
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
-    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger, Utility")
+    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger, Utility, Moderation")
     logger.info("Database tables synchronized: %s", table_counts)
     if server_logger:
         logger.info("Categorized server logging is loaded.")

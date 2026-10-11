@@ -5,6 +5,42 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.2.0] — 2026-10-11
+
+### Added
+- **`cogs/moderation.py`** — new cog with full moderation suite, diagnostics, demo mode, broadcast, and test message
+
+- **Moderation suite** (staff/trusted): `/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge`
+  - All commands run atomic pre-flight checks: input validation → bot permission check → role hierarchy check → guild owner protection → self-target protection → execution
+  - `/purge` skips messages older than 14 days (Discord API limitation)
+
+- **Info commands** (public): `/userinfo`, `/serverinfo`, `/permissions`, `/checkaccess`
+  - `/checkaccess` is a non-destructive pre-flight evaluator — shows exactly which constraint would block an action
+
+- **Owner-only diagnostics**: `/checkpermissions`, `/checkcommands`, `/diagnose`, `/testmoderation`
+  - `/diagnose` checks gateway intents, guild permissions, WebSub status, DB health, and command tree sync
+  - `/testmoderation` dry-runs all 5 validation stages for a moderation action without executing
+
+- **Demo mode engine**: set `DEMO_MODE=true` + `DEMO_GUILD_ID=<id>` in env to intercept all destructive moderation actions in that guild and return `[SIMULATED DEMO MODE — NO REAL ACTION TAKEN]` embeds
+
+- **`/broadcast`**: send an announcement to up to 10 channels simultaneously
+  - 10 separate channel parameters (cleanest Discord UX, no typing)
+  - Supports images and GIFs via `image_url` parameter
+  - Optional role/everyone/here ping, embed or plain text mode, custom title
+  - 0.5s delay between sends to avoid Discord rate limits
+  - Deduplicates channels if the same channel is selected twice
+
+- **`/testmessage`**: owner-only test embed with 4 layout variants (standard, announcement, alert, youtube_notification)
+  - Strictly scoped to `TEST_CHANNEL_ID` env var
+  - 30-second per-channel cooldown
+  - Interactive `[Delete Test Message]` button attached to output
+
+### Changed
+- `main.py`: Moderation cog loaded on startup; banner updated to show all 4 cogs
+- `.env.example`: added `DEMO_MODE`, `DEMO_GUILD_ID`, `DEMO_AUDIT_LOG_CHANNEL`, `TEST_CHANNEL_ID`
+
+---
+
 ## [3.1.2] — 2026-10-10
 
 ### Security
