@@ -5,6 +5,22 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.3.0] — 2026-10-12
+
+### Added
+- **`/listyt_all`** (owner-only) — cross-guild YouTube tracking audit; aggregates all tracked channels across every guild, grouped by guild name/ID, paginated to stay within Discord's 25 field / 1024 char / 4096 desc limits; sends multiple embeds if needed
+- **`/guildlist`** (slash, owner-only) — full guild list with ✅/⚠️ authorization status, member counts, and allowlist instructions; complements the existing `!guildlist` prefix command
+- **`is_bot_owner_only()`** check — strict bot-owner-only `app_commands.check` that excludes guild owners and trusted users; used for owner audit commands
+- **Guild allowlist** (`ALLOWED_GUILD_IDS` env var) — blocks all slash commands in unauthorized guilds with `⛔ This bot is not authorized` message; `on_guild_join` DMs owner when bot is added to any server with authorization status
+- **RSS backoff extended to HTTP 500/502/503** — YouTube CDN 5xx errors now use the same exponential backoff as 404s instead of logging full ERROR tracebacks
+
+### Fixed
+- `/about` footer hardcoded version — now reads `bot.bot_version` live
+- `/help` dropdown: added Moderation, Broadcast, and Utility categories missing since v3.2.0; all 7 categories now document commands with parameters and permission badges
+- `HelpSelect.callback` safe fallback for unknown category values
+
+---
+
 ## [3.2.1] — 2026-10-11
 
 ### Fixed

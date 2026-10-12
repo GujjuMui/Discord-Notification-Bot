@@ -127,6 +127,20 @@ def is_trusted_or_owner():
     return app_commands.check(predicate)
 
 
+def is_bot_owner_only():
+    """Strict bot-owner-only check — guild owner and trusted users are NOT included."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        owner_id = config.BOT_OWNER_ID
+        if owner_id is None:
+            try:
+                app = await interaction.client.application_info()
+                owner_id = app.owner.id if app.owner else None
+            except (discord.HTTPException, discord.Forbidden):
+                return False
+        return interaction.user.id == owner_id
+    return app_commands.check(predicate)
+
+
 async def user_is_authorized(interaction: discord.Interaction) -> bool:
     if not interaction.guild:
         return False
@@ -2024,6 +2038,147 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
                 inline=False,
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── /listyt_all ───────────────────────────────────────────────────
+    @bot.tree.command(
+        name="listyt_all",
+        description="[Owner] List all tracked YouTube channels across every guild.",
+    )
+    @is_bot_owner_only()
+    async def listyt_all(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        all_rows = db.get_yt_monitored_channels()  # No guild_id filter → all guilds
+        if not all_rows:
+            await interaction.followup.send("No YouTube channels tracked anywhere.", ephemeral=True)
+            return
+
+        # Group by guild_id
+        by_guild: dict[str, list[dict]] = {}
+        for row in all_rows:
+            by_guild.setdefault(str(row["guild_id"]), []).append(row)
+
+        # Build paginated embeds — each embed holds multiple guild sections.
+        # We stay within Discord's limits: 25 fields/embed, 1024 chars/field, 4096 desc.
+        embeds: list[discord.Embed] = []
+
+        def _new_embed(page: int) -> discord.Embed:
+            return discord.Embed(
+                title=f"📺 All Tracked YouTube Channels (page {page})",
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc),
+            )
+
+        current_embed = _new_embed(1)
+        page = 1
+        field_count = 0
+
+        for guild_id, rows in by_guild.items():
+            # Try to resolve guild name from bot cache
+            guild_obj = interaction.client.get_guild(int(guild_id))
+            guild_name = guild_obj.name if guild_obj else f"Unknown Guild"
+            guild_label = f"{guild_name} (`{guild_id}`)"
+
+            # Build compact lines for all routes in this guild
+            lines: list[str] = []
+            for row in rows:
+                ch_name = row.get("yt_channel_name") or row["yt_channel_id"]
+                ch_url  = row.get("yt_channel_url") or f"https://youtube.com/channel/{row['yt_channel_id']}"
+                target  = f"<#{row['discord_target_channel_id']}>"
+                filt    = row.get("content_types") or "all"
+                push    = "🟢" if row.get("lease_expires_at") else "🟡"
+                lines.append(f"{push} [{ch_name}]({ch_url}) → {target} `{filt}`")
+
+            # Chunk lines into ≤1024-char field values
+            chunks: list[str] = []
+            current_chunk = ""
+            for line in lines:
+                candidate = (current_chunk + "\n" + line).strip()
+                if len(candidate) > 1020:
+                    chunks.append(current_chunk)
+                    current_chunk = line
+                else:
+                    current_chunk = candidate
+            if current_chunk:
+                chunks.append(current_chunk)
+
+            for i, chunk in enumerate(chunks):
+                # Roll over to a new embed when we hit 25 fields
+                if field_count >= 25:
+                    embeds.append(current_embed)
+                    page += 1
+                    current_embed = _new_embed(page)
+                    field_count = 0
+
+                field_name = guild_label if i == 0 else f"{guild_label} (cont.)"
+                current_embed.add_field(name=field_name[:256], value=chunk, inline=False)
+                field_count += 1
+
+        embeds.append(current_embed)
+
+        # Set footer on last embed
+        total_routes = len(all_rows)
+        total_guilds = len(by_guild)
+        embeds[-1].set_footer(
+            text=f"{total_routes} route(s) across {total_guilds} guild(s) • Owner-only"
+        )
+
+        # Send all pages — Discord allows up to 10 embeds per followup
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
+
+    # ── /guildlist ────────────────────────────────────────────────────
+    @bot.tree.command(
+        name="guildlist",
+        description="[Owner] List all servers the bot is in with authorization status.",
+    )
+    @is_bot_owner_only()
+    async def guildlist_slash(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        allowed = config.ALLOWED_GUILD_IDS
+        guilds = sorted(interaction.client.guilds, key=lambda g: g.name.lower())
+
+        embeds: list[discord.Embed] = []
+        current_embed = discord.Embed(
+            title=f"🌐 Guild List ({len(guilds)} servers)",
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        lines: list[str] = []
+
+        for guild in guilds:
+            authorized = (not allowed) or (guild.id in allowed)
+            status = "✅" if authorized else "⚠️ blocked"
+            lines.append(
+                f"{status} **{guild.name}** `{guild.id}` — {guild.member_count} members"
+            )
+
+        # Chunk into embed description (≤4000 chars per embed)
+        page = 1
+        chunk = ""
+        for line in lines:
+            candidate = (chunk + "\n" + line).strip()
+            if len(candidate) > 3900:
+                current_embed.description = chunk
+                embeds.append(current_embed)
+                page += 1
+                current_embed = discord.Embed(
+                    title=f"🌐 Guild List (page {page})",
+                    color=discord.Color.blurple(),
+                )
+                chunk = line
+            else:
+                chunk = candidate
+        current_embed.description = chunk or "No guilds."
+        current_embed.set_footer(
+            text=f"✅ = authorized  ⚠️ = blocked by ALLOWED_GUILD_IDS\n"
+                 f"Add guild IDs to ALLOWED_GUILD_IDS in Railway to authorize."
+        )
+        embeds.append(current_embed)
+
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
 
     # ── /test_yt ──────────────────────────────────────────────────────
     @bot.tree.command(name="test_yt", description="Send a realistic YouTube notification preview.")
