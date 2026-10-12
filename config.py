@@ -83,3 +83,22 @@ def get_required_token() -> str:
 def validate_config() -> bool:
     """Validate configuration without logging or exposing secrets."""
     return bool((DISCORD_BOT_TOKEN or "").strip())
+
+
+# ---------------------------------------------------------------------------
+# Guild allowlist
+# ---------------------------------------------------------------------------
+# ALLOWED_GUILD_IDS — comma-separated list of guild IDs that are permitted to
+#                     use bot commands.  Any guild not on this list will have
+#                     all slash commands and prefix commands blocked.
+#
+#                     If left empty, only guilds where the bot owner is a
+#                     member (determined at runtime) are permitted.
+#
+#                     Example: ALLOWED_GUILD_IDS=123456789,987654321
+_allowed_raw = os.getenv("ALLOWED_GUILD_IDS", "").strip()
+ALLOWED_GUILD_IDS: frozenset[int] = frozenset(
+    int(gid.strip())
+    for gid in _allowed_raw.split(",")
+    if gid.strip().isdigit()
+)

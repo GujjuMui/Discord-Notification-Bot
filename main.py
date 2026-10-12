@@ -89,6 +89,27 @@ bot.allowed_mentions = allowed_mentions
 bot.format_mentions = format_mentions
 bot.bot_version = BOT_VERSION
 
+
+# ---------------------------------------------------------------------------
+# Global guild allowlist — blocks all slash commands in unauthorized guilds
+# ---------------------------------------------------------------------------
+
+@bot.tree.interaction_check
+async def global_guild_check(interaction: discord.Interaction) -> bool:
+    """Reject all slash command interactions from guilds not on the allowlist."""
+    allowed = config.ALLOWED_GUILD_IDS
+    if not allowed:
+        # No allowlist configured — permit all guilds (default open mode)
+        return True
+    guild = interaction.guild
+    if guild is None:
+        # DM interactions — allow through (no guild context)
+        return True
+    if guild.id in allowed:
+        return True
+    # Unauthorized guild — raise CheckFailure so on_app_command_error handles it
+    raise app_commands.CheckFailure(f"Guild {guild.id} is not authorized.")
+
 tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
 bot_owner_id: Optional[int] = config.BOT_OWNER_ID
@@ -169,7 +190,19 @@ async def on_app_command_error(
 ) -> None:
     original = getattr(error, "original", error)
 
-    if isinstance(error, (app_commands.CheckFailure, app_commands.MissingPermissions)):
+    # Guild allowlist check — block all commands in unauthorized guilds
+    if isinstance(error, app_commands.CheckFailure):
+        guild = interaction.guild
+        allowed = config.ALLOWED_GUILD_IDS
+        if guild and allowed and guild.id not in allowed:
+            try:
+                await interaction.response.send_message(
+                    "⛔ This bot is not authorized to operate in this server.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
+            return
         await _send_command_error(
             interaction,
             "🔒 Permission Required",
@@ -280,6 +313,31 @@ async def on_ready() -> None:
 async def on_guild_join(guild: discord.Guild) -> None:
     logger.info("Joined guild: %s (%s)", guild.name, guild.id)
 
+    # Notify the bot owner when the bot is added to an unknown/unauthorized guild.
+    owner_id = bot_owner_id or await resolve_bot_owner_id()
+    if owner_id is None:
+        return
+
+    # Check if this guild is authorized
+    allowed = config.ALLOWED_GUILD_IDS
+    is_authorized = (not allowed) or (guild.id in allowed)
+
+    try:
+        owner = await bot.fetch_user(owner_id)
+        status = "✅ Authorized" if is_authorized else "⚠️ NOT in allowlist — commands blocked"
+        await owner.send(
+            f"📥 **Bot added to a new server**\n"
+            f"**Name:** {guild.name}\n"
+            f"**ID:** `{guild.id}`\n"
+            f"**Members:** {guild.member_count}\n"
+            f"**Owner:** {guild.owner} (`{guild.owner_id}`)\n"
+            f"**Status:** {status}\n\n"
+            f"Add `{guild.id}` to `ALLOWED_GUILD_IDS` in Railway to authorize it, "
+            f"or use `/guildlist` to review all servers."
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        logger.warning("Could not DM owner about new guild join: %s (%s)", guild.name, guild.id)
+
 
 @bot.event
 async def on_guild_remove(guild: discord.Guild) -> None:
@@ -304,6 +362,57 @@ async def help_command(ctx: commands.Context) -> None:
         inline=False,
     )
     await ctx.send(embed=embed)
+
+
+@bot.command(name="guildlist")
+async def guildlist(ctx: commands.Context) -> None:
+    """Owner-only: list all guilds the bot is in with authorization status."""
+    owner_id = bot_owner_id or await resolve_bot_owner_id()
+    if ctx.author.id != owner_id:
+        return  # Silently ignore non-owners
+
+    allowed = config.ALLOWED_GUILD_IDS
+    lines: list[str] = []
+
+    for guild in sorted(bot.guilds, key=lambda g: g.name.lower()):
+        authorized = (not allowed) or (guild.id in allowed)
+        status = "✅" if authorized else "⚠️"
+
+        # Try to get an invite link for the first available text channel
+        invite_url = ""
+        for ch in guild.text_channels:
+            perms = ch.permissions_for(guild.me)
+            if perms.create_instant_invite:
+                try:
+                    invite = await ch.create_invite(max_age=3600, max_uses=1, reason="guildlist owner command")
+                    invite_url = invite.url
+                    break
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+
+        link_part = f" — {invite_url}" if invite_url else " — (no invite perm)"
+        lines.append(
+            f"{status} **{guild.name}** (`{guild.id}`) {guild.member_count} members{link_part}"
+        )
+
+    # Split into chunks to stay under Discord's 2000-char limit
+    chunks: list[str] = []
+    current = f"**Bot is in {len(bot.guilds)} guild(s):**\n"
+    for line in lines:
+        if len(current) + len(line) + 1 > 1900:
+            chunks.append(current)
+            current = ""
+        current += line + "\n"
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
+        await ctx.author.send(chunk)
+
+    try:
+        await ctx.message.add_reaction("✅")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 async def main() -> None:
