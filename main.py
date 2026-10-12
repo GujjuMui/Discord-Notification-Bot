@@ -147,11 +147,19 @@ async def setup_bot() -> None:
     utility = Utility(bot)
     await bot.add_cog(utility)
 
-    moderation = Moderation(bot)
-    await bot.add_cog(moderation)
+    if config.ENABLE_MODERATION:
+        moderation = Moderation(bot)
+        await bot.add_cog(moderation)
+        logger.info("Moderation cog loaded (ENABLE_MODERATION=true).")
+    else:
+        logger.info("Moderation cog disabled (set ENABLE_MODERATION=true to enable).")
 
-    channel_manager = ChannelManager(bot)
-    await bot.add_cog(channel_manager)
+    if config.ENABLE_CHANNEL_MANAGER:
+        channel_manager = ChannelManager(bot)
+        await bot.add_cog(channel_manager)
+        logger.info("Channel manager cog loaded (ENABLE_CHANNEL_MANAGER=true).")
+    else:
+        logger.info("Channel manager cog disabled (set ENABLE_CHANNEL_MANAGER=true to enable).")
 
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")

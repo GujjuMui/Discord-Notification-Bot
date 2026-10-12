@@ -86,6 +86,20 @@ def validate_config() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Feature flags — opt-in cog loading
+# ---------------------------------------------------------------------------
+# ENABLE_MODERATION — set true to load the moderation cog (ban/kick/timeout/
+#                     purge/broadcast and all related slash + prefix commands).
+#                     Default: false — cog is not loaded, commands never register.
+ENABLE_MODERATION: bool = os.getenv("ENABLE_MODERATION", "false").strip().lower() in {"true", "1"}
+
+# ENABLE_CHANNEL_MANAGER — set true to load the channel manager cog
+#                          (/channelmanager, /leaveguild).
+#                          Default: false.
+ENABLE_CHANNEL_MANAGER: bool = os.getenv("ENABLE_CHANNEL_MANAGER", "false").strip().lower() in {"true", "1"}
+
+
+# ---------------------------------------------------------------------------
 # Guild allowlist
 # ---------------------------------------------------------------------------
 # ALLOWED_GUILD_IDS — comma-separated list of guild IDs that are permitted to
