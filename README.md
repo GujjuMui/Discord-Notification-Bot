@@ -2,7 +2,7 @@
 
 A production-grade Discord bot delivering **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, full **8-channel categorized server audit logging**, a **moderation suite** with pre-flight safety checks, and multi-channel **broadcast** announcements.
 
-**Version:** 3.2.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
+**Version:** 3.3.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
 
 ---
 
@@ -165,11 +165,20 @@ The bot exposes `GET /health` → `200 OK` used by Railway's healthcheck (`railw
 | `/permissions` | — | Public | Show bot's effective permissions in this channel |
 | `/checkaccess` | `<action>` `@user` | Staff | Pre-flight check — would this action succeed? |
 
+### Channel Manager (Owner-Only, DM-compatible)
+
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/channelmanager` | — | Owner | Guild picker → list / create / delete channels across any guild from DMs. Requires `Manage Channels` in target guild. |
+
 ### Diagnostics (Owner-Only)
 
 | Command | Parameters | Description |
 |---|---|---|
-| `/checkpermissions` | `[guild_id]` | Permission matrix across all channels |
+| `/permaudit` | — | Check all guilds for missing permissions — shows ✅ fully authorized vs ⚠️ missing with per-guild breakdown |
+| `/listyt_all` | — | Cross-guild YouTube tracking audit grouped by guild |
+| `/guildlist` | — | All servers with ✅/⚠️ authorization status (also `!guildlist`) |
+| `/checkpermissions` | `[guild_id]` | Per-channel permission matrix |
 | `/checkcommands` | — | List all commands with access tiers |
 | `/diagnose` | — | Full system health check |
 | `/testmoderation` | `<action>` `@user` | Dry-run all 5 validation stages |
@@ -200,7 +209,7 @@ The bot exposes `GET /health` → `200 OK` used by Railway's healthcheck (`railw
 | `/sync` | — | Staff | Sync global slash command tree |
 | `/botstatus` | — | Staff | Live health dashboard |
 | `/about` | — | Public | Bot profile with live stats |
-| `/help` | — | Public | Interactive categorized help menu |
+| `/help` | — | Public | Interactive categorized help menu (9 categories) |
 
 ---
 

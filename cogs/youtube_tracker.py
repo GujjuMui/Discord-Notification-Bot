@@ -199,6 +199,14 @@ class HelpSelect(discord.ui.Select):
                 description="Manage trusted users and administrative access."),
             discord.SelectOption(label="System & Health", value="health", emoji="📊",
                                  description="View /botstatus and /about."),
+            discord.SelectOption(
+                label=("Channel Manager" if admin_view else "Channel Manager 🔒 Owner Only"),
+                value="channelmgr", emoji="🏗️",
+                description="Create and delete channels across all guilds from DMs."),
+            discord.SelectOption(
+                label=("Owner Tools" if admin_view else "Owner Tools 🔒 Owner Only"),
+                value="ownertools", emoji="👑",
+                description="/listyt_all, /guildlist, /permaudit, /diagnose, /channelmanager."),
         ]
         super().__init__(placeholder="Select a help category…", min_values=1, max_values=1, options=options)
 
@@ -311,6 +319,42 @@ class HelpSelect(discord.ui.Select):
                     "`/diagnose` — automated system health check *(Owner only)*"
                 ),
                 color=discord.Color.blue(),
+            ),
+            "channelmgr": discord.Embed(
+                title="🏗️ Channel Manager",
+                description=(
+                    "🔒 **Owner Only** — works from DMs\n\n"
+                    "`/channelmanager` — open the channel manager interface\n\n"
+                    "**Flow:**\n"
+                    "1. Pick a guild from the dropdown (up to 25 guilds shown)\n"
+                    "2. Choose an action:\n"
+                    "   • **📋 List Channels** — paginated list with type icons and categories\n"
+                    "   • **➕ Create Channel** — modal form (name, type, category, topic)\n"
+                    "     Supported types: `text` · `voice` · `category` · `forum` · `stage` · `news`\n"
+                    "   • **🗑️ Delete Channel** — dropdown picker + confirm dialog\n\n"
+                    "**Requires:** Bot must have `Manage Channels` permission in the target guild.\n"
+                    "Run `/permaudit` to check which guilds are missing this permission."
+                ),
+                color=discord.Color(0xFF9500),
+            ),
+            "ownertools": discord.Embed(
+                title="👑 Owner Tools",
+                description=(
+                    "🔒 **Strictly Bot Owner Only**\n\n"
+                    "`/listyt_all` — cross-guild YouTube tracking audit\n"
+                    "  Shows all tracked channels grouped by guild with push status\n\n"
+                    "`/guildlist` — list all servers with ✅/⚠️ authorization status\n"
+                    "  Also available as `!guildlist` prefix command\n\n"
+                    "`/permaudit` — check which guilds have all required permissions\n"
+                    "  Full matrix: send, embed, ban, kick, timeout, manage channels, audit log\n\n"
+                    "`/channelmanager` — DM-based channel create/delete across all guilds\n\n"
+                    "`/diagnose` — full system health check (intents, perms, WebSub, DB)\n\n"
+                    "`/checkpermissions [guild_id]` — per-channel permission matrix\n\n"
+                    "`/checkcommands` — registered command list with access tiers\n\n"
+                    "`/testmoderation <action> @user` — dry-run moderation validation\n\n"
+                    "`/testmessage [layout] [image_url]` — send test embed to TEST_CHANNEL_ID"
+                ),
+                color=discord.Color(0xAF52DE),
             ),
         }
         selected = self.values[0]

@@ -1333,6 +1333,118 @@ class Moderation(commands.Cog):
         else:
             await self._prefix_err(ctx, f"An error occurred: {error}")
 
+    # ==================================================================
+    # SECTION 6 — /permaudit (owner-only cross-guild permission audit)
+    # ==================================================================
+
+    @app_commands.command(
+        name="permaudit",
+        description="[Owner] Check which guilds have all required permissions for full bot functionality.",
+    )
+    @_is_owner_check()
+    async def permaudit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        # Full permission set required for all bot features
+        REQUIRED_GUILD_PERMS = {
+            # Core messaging
+            "send_messages":        "Send Messages",
+            "embed_links":          "Embed Links",
+            "attach_files":         "Attach Files",
+            "read_message_history": "Read Message History",
+            "view_channel":         "View Channels",
+            # Moderation
+            "manage_messages":      "Manage Messages (purge)",
+            "ban_members":          "Ban Members",
+            "kick_members":         "Kick Members",
+            "moderate_members":     "Timeout Members",
+            # Channel manager
+            "manage_channels":      "Manage Channels (create/delete)",
+            # Audit logging
+            "view_audit_log":       "View Audit Log",
+            # Invite creation (guildlist invites)
+            "create_instant_invite": "Create Invite",
+        }
+
+        guilds_ok:      list[str] = []
+        guilds_partial: list[tuple[str, list[str]]] = []
+
+        for guild in sorted(self.bot.guilds, key=lambda g: g.name.lower()):
+            bot_member = guild.me
+            if bot_member is None:
+                guilds_partial.append((f"{guild.name} (`{guild.id}`)", ["Bot member not found"]))
+                continue
+
+            missing = [
+                label
+                for perm, label in REQUIRED_GUILD_PERMS.items()
+                if not getattr(bot_member.guild_permissions, perm, False)
+            ]
+
+            if missing:
+                guilds_partial.append((f"{guild.name} (`{guild.id}`)", missing))
+            else:
+                guilds_ok.append(f"✅ {guild.name} (`{guild.id}`)")
+
+        # Build embed(s)
+        embeds: list[discord.Embed] = []
+
+        # Page 1 — summary + fully authorized guilds
+        e1 = discord.Embed(
+            title="🔐 Permission Audit — All Guilds",
+            color=discord.Color(0x34C759) if not guilds_partial else discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        e1.add_field(
+            name=f"✅ Fully authorized ({len(guilds_ok)})",
+            value="\n".join(guilds_ok) or "None",
+            inline=False,
+        )
+        e1.set_footer(
+            text=f"{len(guilds_ok)} fully authorized · {len(guilds_partial)} need attention · "
+                 f"{len(self.bot.guilds)} total guilds"
+        )
+        embeds.append(e1)
+
+        # Page 2+ — guilds with missing permissions
+        if guilds_partial:
+            lines: list[str] = []
+            for guild_label, missing in guilds_partial:
+                lines.append(f"⚠️ **{guild_label}**")
+                for m in missing:
+                    lines.append(f"  • ❌ {m}")
+                lines.append("")
+
+            # Chunk into embeds
+            chunk = ""
+            page = 2
+            for line in lines:
+                candidate = (chunk + "\n" + line).strip()
+                if len(candidate) > 3900:
+                    e = discord.Embed(
+                        title=f"⚠️ Guilds Needing Attention (p{page})",
+                        description=chunk,
+                        color=discord.Color.orange(),
+                    )
+                    embeds.append(e)
+                    page += 1
+                    chunk = line
+                else:
+                    chunk = candidate
+            if chunk:
+                e = discord.Embed(
+                    title=f"⚠️ Guilds Needing Attention (p{page})",
+                    description=chunk,
+                    color=discord.Color.orange(),
+                )
+                e.set_footer(
+                    text="Fix: go to Server Settings → Integrations → bot → grant missing permissions"
+                )
+                embeds.append(e)
+
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))
