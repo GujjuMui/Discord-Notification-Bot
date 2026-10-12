@@ -172,8 +172,16 @@ class HelpSelect(discord.ui.Select):
                 value="logging", emoji="📁",
                 description="Configure the 8-channel server logging system."),
             discord.SelectOption(
+                label=("Moderation & Broadcast" if admin_view else "Moderation & Broadcast 🔒 Staff/Owner"),
+                value="moderation", emoji="🛡️",
+                description="Ban, kick, timeout, purge, broadcast, and diagnostics."),
+            discord.SelectOption(
+                label=("Announcements & Utility" if admin_view else "Announcements & Utility 🔒 Admin/Trusted"),
+                value="utility", emoji="📢",
+                description="/say, /announcement, /edit_say commands."),
+            discord.SelectOption(
                 label=("Trust & Permissions" if admin_view else "Trust & Permissions 🔒 Admin/Trusted Required"),
-                value="trust", emoji="🛡️",
+                value="trust", emoji="🔑",
                 description="Manage trusted users and administrative access."),
             discord.SelectOption(label="System & Health", value="health", emoji="📊",
                                  description="View /botstatus and /about."),
@@ -192,19 +200,27 @@ class HelpSelect(discord.ui.Select):
             "overview": discord.Embed(
                 title="🏠 Overview & Getting Started",
                 description=(
-                    "Discord Notification Bot combines YouTube feed routing with full "
-                    "categorized server audit logging.\n\nStart with /about for live bot "
-                    "information, then use /add_yt to route a YouTube channel into a Discord channel."
+                    "**P U M M E L O** combines YouTube feed routing with full "
+                    "categorized server audit logging and a moderation suite.\n\n"
+                    "**Quick start:**\n"
+                    "1. `/about` — see live bot stats\n"
+                    "2. `/add_yt` — route a YouTube channel to a Discord channel\n"
+                    "3. `/setup_logs` — configure 8-channel audit logging\n"
+                    "4. `/broadcast` — send announcements to multiple channels at once"
                 ),
                 color=discord.Color.blurple(),
             ),
             "youtube": discord.Embed(
                 title="📺 YouTube Feed Routing",
                 description=(
-                    "/add_yt <url> <#target_channel> [role] [types] — subscribe and filter content.\n"
-                    "/remove_yt <url_or_id> [#target_channel] — remove one route or all routes.\n"
-                    "/list_yt — view all configured routes.\n"
-                    "/ytinfo <url> — resolve a YouTube channel and inspect its RSS feed."
+                    "**🔒 Admin/Trusted Required**\n\n"
+                    "`/add_yt <url> <#channel> [role] [types]` — subscribe and filter content\n"
+                    "`/remove_yt <url_or_id> [#channel]` — remove one or all routes\n"
+                    "`/list_yt` — view all configured routes and push status (🟢/🟡)\n"
+                    "`/test_yt <url> [#channel]` — send a test notification\n"
+                    "`/ytinfo <url>` — resolve a YouTube URL to channel ID + RSS info\n\n"
+                    "**Content type filters:** all · videos · shorts · live · community\n"
+                    "**Push engine:** Google WebSub (instant) + 60s RSS fallback safety net"
                 ),
                 color=discord.Color.red(),
             ),
@@ -212,32 +228,83 @@ class HelpSelect(discord.ui.Select):
                 title="📁 Audit Logging Setup",
                 description=(
                     ("🔒 Admin/Trusted Required\n\n" if locked else "")
-                    + "/setup_logs auto_create:True creates the final 8-channel logging system "
-                      "under 📁 SERVER LOGS.\n\nChannels: chat, member, profile, role, channel, "
-                      "server, voice, and moderation."
+                    + "`/setup_logs auto_create:True` — create 8 log channels automatically\n"
+                      "`/setup_logs type:<type> channel:<#ch>` — manually map a log type\n\n"
+                      "**Log channels:**\n"
+                      "• `chat-logs` — message edits, deletes, bulk purges\n"
+                      "• `member-logs` — joins, leaves, bans, kicks, timeouts\n"
+                      "• `profile-logs` — username, avatar, nickname changes\n"
+                      "• `role-logs` — role create/delete/permission edits\n"
+                      "• `channel-logs` — channel create/delete/edits\n"
+                      "• `server-logs` — server settings, emoji/sticker events\n"
+                      "• `voice-logs` — voice join/leave/move/mute\n"
+                      "• `moderation-logs` — audit log moderation actions"
                 ),
                 color=discord.Color.gold(),
             ),
-            "trust": discord.Embed(
-                title="🛡️ Trust & Permissions",
+            "moderation": discord.Embed(
+                title="🛡️ Moderation & Broadcast",
+                description=(
+                    ("🔒 Staff/Owner Required\n\n" if locked else "")
+                    + "**Moderation** (slash + prefix):\n"
+                      "`/ban @user [reason] [days]` / `!ban @user [reason]`\n"
+                      "`/kick @user [reason]` / `!kick @user [reason]`\n"
+                      "`/timeout @user <minutes> [reason]` / `!timeout @user <min> [reason]`\n"
+                      "`/untimeout @user [reason]` / `!untimeout @user [reason]`\n"
+                      "`/purge <1-100> [@user]` / `!purge <1-100> [@user]`\n\n"
+                      "**Info** (public):\n"
+                      "`/userinfo [@user]` · `/serverinfo` · `/permissions` · `/checkaccess <action> @user`\n\n"
+                      "**Broadcast** (staff):\n"
+                      "`/broadcast <message> <#ch1> ... [#ch10] [image_url] [ping_role]`\n\n"
+                      "**Owner diagnostics:**\n"
+                      "`/diagnose` · `/checkpermissions` · `/checkcommands` · `/testmoderation` · `/testmessage`"
+                ),
+                color=discord.Color(0xFF3B30),
+            ),
+            "utility": discord.Embed(
+                title="📢 Announcements & Utility",
                 description=(
                     ("🔒 Admin/Trusted Required\n\n" if locked else "")
-                    + "/trust add <@user>\n/trust remove <@user>\n/trust list\n\n"
-                      "Administrative setup commands are restricted to the bot owner, "
-                      "server owner, and trusted users."
+                    + "`/say <message> [attachment]` — send a bot message in the current channel\n"
+                      "`/announcement <#channel> <message> [embed] [title] [color] [ping_role] [image_url] [button]`\n"
+                      "  — create an announcement with live preview before posting\n"
+                      "`/edit_say <message_id> <new_content>` — edit a previously sent bot message\n\n"
+                      "Prefix equivalents: `!userinfo`, `!serverinfo` (read-only, no restrictions)"
+                ),
+                color=discord.Color(0x34C759),
+            ),
+            "trust": discord.Embed(
+                title="🔑 Trust & Permissions",
+                description=(
+                    ("🔒 Admin/Trusted Required\n\n" if locked else "")
+                    + "`/trust add @user` — grant admin bot access in this server\n"
+                      "`/trust remove @user` — revoke trusted status\n"
+                      "`/trust list` — show all trusted users\n\n"
+                      "**Access tiers:**\n"
+                      "• **Bot Owner** — all commands, all guilds\n"
+                      "• **Server Owner** — all commands in their guild\n"
+                      "• **Trusted User** — admin commands in their guild\n"
+                      "• **Public** — `/userinfo`, `/serverinfo`, `/permissions`, `/about`, `/help`"
                 ),
                 color=discord.Color.green(),
             ),
             "health": discord.Embed(
                 title="📊 System & Health",
                 description=(
-                    "/botstatus — live operational dashboard (Admin/Trusted/Owner).\n"
-                    "/about — public bot profile with live server, feed, uptime, and latency stats."
+                    "`/botstatus` — live dashboard: RAM, CPU, gateway, RSS, WebSub status *(Admin/Trusted)*\n"
+                    "`/about` — public bot profile with live server count, feed count, uptime, and latency\n"
+                    "`/sync` — manually sync the global slash command tree *(Admin/Trusted)*\n"
+                    "`/diagnose` — automated system health check *(Owner only)*"
                 ),
                 color=discord.Color.blue(),
             ),
         }
-        await interaction.response.send_message(embed=embeds[self.values[0]], ephemeral=True)
+        selected = self.values[0]
+        embed = embeds.get(selected)
+        if embed is None:
+            await interaction.response.send_message("Unknown category.", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class HelpView(discord.ui.View):
@@ -1597,7 +1664,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             value=f"[Support]({repo_url}/issues) • [Invite]({invite}) • [GitHub]({repo_url}) • [Docs]({repo_url}#readme)",
             inline=False,
         )
-        embed.set_footer(text="v3.0.0 • Developed / powered by GujjuMui")
+        embed.set_footer(text=f"v{getattr(interaction.client, 'bot_version', '3.2.0')} • Developed / powered by GujjuMui")
         await interaction.response.send_message(embed=embed)
 
     # ── /help ─────────────────────────────────────────────────────────

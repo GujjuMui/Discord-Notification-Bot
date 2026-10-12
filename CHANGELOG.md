@@ -5,6 +5,19 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.2.1] — 2026-10-11
+
+### Fixed
+- `/about` footer was hardcoded to `v3.0.0` — now reads live version from `bot.bot_version` attribute
+- `/help` was missing Moderation, Utility, and Broadcast categories added in v3.2.0; all 7 categories now documented with full command lists, parameters, and permission badges
+- `HelpSelect.callback` now has a safe fallback for unknown category values instead of a potential `KeyError`
+
+### Changed
+- `bot.bot_version` exposed on the bot object at startup so cogs can reference it without a circular import
+- README fully rewritten: complete command reference table (all 30+ commands), environment variable table, architecture diagram, WebSub lifecycle, security section, Railway deployment guide
+
+---
+
 ## [3.2.0] — 2026-10-11
 
 ### Added

@@ -1,8 +1,23 @@
 # P U M M E L O — Discord Notification Bot
 
-A production-grade Discord bot for **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, with a 60-second RSS fallback safety net and full categorized server audit logging across 8 dedicated channels.
+A production-grade Discord bot delivering **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, full **8-channel categorized server audit logging**, a **moderation suite** with pre-flight safety checks, and multi-channel **broadcast** announcements.
 
 **Version:** 3.2.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
+
+---
+
+## Feature Highlights
+
+- **Instant YouTube notifications** — Google WebSub push delivers new uploads within seconds; 60-second RSS fallback catches any missed pushes
+- **Content-type detection** — classifies Videos, Shorts, Live Streams, and Community Posts via oEmbed + HEAD redirect
+- **Per-route configuration** — each YouTube channel can post to a different Discord channel, with its own role ping and content filter
+- **8-channel audit logging** — chat, member, profile, role, channel, server, voice, and moderation events
+- **Moderation suite** — `/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge` with full pre-flight hierarchy and permission checks; also available as `!` prefix commands
+- **Broadcast** — send announcements to up to 10 channels simultaneously with image/GIF support
+- **RBAC trust system** — bot owner → server owner → trusted users; all admin commands are gated
+- **Demo mode** — intercepts destructive actions and returns simulated embeds (no real execution)
+- **WebSub lease auto-renewal** — subscriptions renew 24h before 7-day expiry
+- **SQLite + WAL mode** — concurrent-safe, Railway volume-persistent
 
 ---
 
@@ -12,13 +27,11 @@ A production-grade Discord bot for **instant YouTube upload notifications** via 
 YouTube Upload
       │
       ▼
-Google WebSub Hub  ──POST──▶  aiohttp.web /youtube/webhook
+Google WebSub Hub ──POST──▶  aiohttp.web /youtube/webhook
       │                              │
-      │                    _process_push_payload()
-      │                              │
-      │              Guard: channel_id tracked?
-      │              No → reject (connected accounts)
-      │              Yes ↓
+      │                    Guard: channel_id tracked?
+      │                    No → reject (connected accounts)
+      │                    Yes ↓
       │                    oEmbed classification
       │                    (video / short / live)
       │                              │
@@ -30,44 +43,48 @@ RSS Fallback (60s)         Discord embed + role ping
              (never sends same video twice)
 ```
 
-**Primary path:** Google pushes new uploads to your webhook within seconds.  
-**Fallback path:** RSS poller runs every 60 seconds to catch any delayed pushes.  
-**Deduplication:** `yt_content_route_cache` keyed on `(guild, channel, video_id)` — zero duplicates regardless of which path fired.
-
----
-
-## Features
-
-- **Instant WebSub push notifications** — Google delivers new uploads in seconds
-- **YouTube Shorts / Live / Video / Community** detection via oEmbed + HEAD redirect
-- **HD thumbnails** — `maxresdefault.jpg` → `hqdefault.jpg` fallback
-- **Per-route configuration** — different Discord channels, roles, and content filters per YouTube source
-- **8-channel categorized server audit logging** — chat, member, profile, role, channel, server, voice, moderation
-- **Auto-restore** — log channel registrations survive Railway redeploys
-- **WebSub lease auto-renewal** — subscriptions renew 24h before expiry (7-day lease)
-- **SSRF protection** — outbound fetches restricted to allowlisted YouTube/Google hostnames
-- **Mention injection prevention** — scraped YouTube content cannot inject `@everyone` or role pings
-- **Railway volume persistence** — SQLite survives redeploys via persistent volume at `/app/data`
-
 ---
 
 ## Project Structure
 
 ```
 Discord Notification Bot/
-├── main.py                  # Bot entry point, event handlers, on_ready banner
+├── main.py                  # Bot entry point, cog loading, on_ready banner
 ├── config.py                # Environment variable loading and validation
-├── database.py              # SQLite persistence, deduplication, WebSub lease tracking
+├── database.py              # SQLite persistence, dedup, WebSub lease tracking
 ├── requirements.txt         # Pinned dependencies
 ├── .env.example             # All environment variable documentation
 ├── .gitignore               # Excludes secrets, DB, venv, cache
+├── railway.toml             # Railway build/deploy config with healthcheck
+├── Procfile                 # Fallback start command
 ├── cogs/
 │   ├── youtube_tracker.py   # WebSub engine, RSS fallback, slash commands
 │   ├── server_logger.py     # 8-channel categorized audit logging
-│   └── utility.py           # /say, /announcement, /edit_say commands
+│   ├── utility.py           # /say, /announcement, /edit_say
+│   └── moderation.py        # Moderation suite, diagnostics, broadcast
 └── utils/
     └── helpers.py           # Discord mention formatting utilities
 ```
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the values.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DISCORD_BOT_TOKEN` | ✅ | — | Bot token from Discord Developer Portal |
+| `BOT_OWNER_ID` | Optional | Auto-detected | Discord user ID of the bot owner |
+| `DATABASE_PATH` | Optional | `youtube_bot.db` | SQLite file path. On Railway: `/app/data/youtube_bot.db` |
+| `SYNC_COMMANDS` | Optional | `false` | Set `true` to sync slash commands on startup. Use `/sync` instead in production. |
+| `WEBHOOK_URL` | Optional | — | Public HTTPS URL for WebSub push. e.g. `https://your-app.up.railway.app/youtube/webhook` |
+| `WEBHOOK_PORT` | Optional | `8080` | Port the embedded aiohttp webhook server listens on |
+| `FALLBACK_POLL_INTERVAL` | Optional | `60` | RSS fallback poll interval in seconds (min 60) |
+| `DEMO_MODE` | Optional | `false` | Set `true` to enable demo/simulation mode |
+| `DEMO_GUILD_ID` | Optional | — | Guild ID where demo mode intercepts destructive actions |
+| `DEMO_AUDIT_LOG_CHANNEL` | Optional | — | Channel ID for demo mode audit log events |
+| `TEST_CHANNEL_ID` | Optional | — | Channel ID where `/testmessage` is allowed to post |
 
 ---
 
@@ -76,119 +93,133 @@ Discord Notification Bot/
 **Requirements:** Python 3.11+
 
 ```bash
-# 1. Clone and enter the repo
+# 1. Clone
 git clone https://github.com/GujjuMui/Discord-Notification-Bot.git
 cd Discord-Notification-Bot
 
-# 2. Create virtual environment
+# 2. Virtual environment
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 # source .venv/bin/activate   # Linux/macOS
 
-# 3. Install dependencies
+# 3. Dependencies
 pip install -r requirements.txt
 
-# 4. Configure environment
+# 4. Configure
 copy .env.example .env        # Windows
 # cp .env.example .env        # Linux/macOS
-# Edit .env and set DISCORD_BOT_TOKEN
+# Edit .env — set DISCORD_BOT_TOKEN at minimum
 
 # 5. Run
 python main.py
 ```
 
-> **Note:** WebSub push notifications require a publicly reachable HTTPS URL. For local testing, use [ngrok](https://ngrok.com): `ngrok http 8080` and set `WEBHOOK_URL=https://xxxx.ngrok-free.app/youtube/webhook` in `.env`.
+For WebSub testing locally, use [ngrok](https://ngrok.com):
+```bash
+ngrok http 8080
+# Then set WEBHOOK_URL=https://xxxx.ngrok-free.app/youtube/webhook in .env
+```
 
 ---
 
 ## Railway Deployment
 
-1. Push to GitHub
-2. Create a new Railway project → **Deploy from GitHub repo**
+1. Push repo to GitHub
+2. Create Railway project → **Deploy from GitHub repo**
 3. Add a **Volume** mounted at `/app/data`
-4. Set environment variables (see table below)
-5. Railway auto-deploys on every push
+4. Set environment variables (see table above)
+5. Railway auto-deploys on every `git push`
 
-### Required Railway Variables
+After each deploy that changes the command tree, run `/sync` once in Discord.
 
-| Variable | Example Value | Required |
-|---|---|---|
-| `DISCORD_BOT_TOKEN` | `MTU1...` | ✅ Yes |
-| `DATABASE_PATH` | `/app/data/youtube_bot.db` | ✅ Yes |
-| `WEBHOOK_URL` | `https://your-app.up.railway.app/youtube/webhook` | ✅ For WebSub |
-| `BOT_OWNER_ID` | `123456789012345678` | Optional |
-| `SYNC_COMMANDS` | `false` | Optional |
-| `WEBHOOK_PORT` | `8080` | Optional (default: 8080) |
-| `FALLBACK_POLL_INTERVAL` | `60` | Optional (default: 60s) |
+### Railway healthcheck
+The bot exposes `GET /health` → `200 OK` used by Railway's healthcheck (`railway.toml`).
 
 ---
 
-## Slash Commands
+## Command Reference
 
 ### YouTube Tracking
 
-| Command | Description | Access |
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/add_yt` | `url` `#channel` `[role]` `[types]` `[name]` | Staff | Subscribe to a YouTube channel |
+| `/remove_yt` | `url_or_id` `[#channel]` | Staff | Remove a subscription |
+| `/list_yt` | — | Staff | List all routes with push status |
+| `/test_yt` | `url` `[#channel]` | Staff | Send a test notification embed |
+| `/ytinfo` | `url` | Public | Resolve a YouTube URL to channel ID + RSS info |
+
+**Content type filters:** `all` · `videos` · `shorts` · `live` · `community`
+
+### Moderation (Slash + Prefix)
+
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/ban` / `!ban` | `@user` `[reason]` `[days]` | Staff | Ban a member (pre-flight checked) |
+| `/kick` / `!kick` | `@user` `[reason]` | Staff | Kick a member |
+| `/timeout` / `!timeout` | `@user` `<minutes>` `[reason]` | Staff | Timeout a member (1–40320 min) |
+| `/untimeout` / `!untimeout` | `@user` `[reason]` | Staff | Remove an active timeout |
+| `/purge` / `!purge` | `<1-100>` `[@user]` | Staff | Bulk-delete messages (max 14 days) |
+| `/userinfo` / `!userinfo` | `[@user]` | Public | Show member info, roles, hierarchy rank |
+| `/serverinfo` / `!serverinfo` | — | Public | Show server stats, boost level, verification |
+| `/permissions` | — | Public | Show bot's effective permissions in this channel |
+| `/checkaccess` | `<action>` `@user` | Staff | Pre-flight check — would this action succeed? |
+
+### Diagnostics (Owner-Only)
+
+| Command | Parameters | Description |
 |---|---|---|
-| `/add_yt` | Subscribe to a YouTube channel with optional role ping and content filter | Admin/Trusted |
-| `/remove_yt` | Remove a subscription | Admin/Trusted |
-| `/list_yt` | List all tracked channels and their push status (🟢/🟡) | Admin/Trusted |
-| `/test_yt` | Send a test notification embed to any channel | Admin/Trusted |
-| `/ytinfo` | Resolve a YouTube URL to channel ID and show push status | Public |
+| `/checkpermissions` | `[guild_id]` | Permission matrix across all channels |
+| `/checkcommands` | — | List all commands with access tiers |
+| `/diagnose` | — | Full system health check |
+| `/testmoderation` | `<action>` `@user` | Dry-run all 5 validation stages |
+| `/testmessage` | `[layout]` `[image_url]` | Send test embed to TEST_CHANNEL_ID |
+
+### Broadcast & Utility
+
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/broadcast` | `<message>` `<#ch1>…[#ch10]` `[image_url]` `[ping]` | Staff | Send announcement to up to 10 channels |
+| `/say` | `<message>` `[attachment]` | Staff | Send a bot message in current channel |
+| `/announcement` | `<#channel>` `<message>` `[embed]` `[title]` `[ping_role]` `[image_url]` | Staff | Announcement with live preview |
+| `/edit_say` | `<message_id>` `<new_content>` | Staff | Edit a previously sent bot message |
 
 ### Server Logging
 
-| Command | Description | Access |
-|---|---|---|
-| `/setup_logs` | Auto-create 8-channel logging category or manually map log types | Admin/Trusted |
-
-### Utility
-
-| Command | Description | Access |
-|---|---|---|
-| `/say` | Send a message as the bot in the current channel | Admin/Trusted |
-| `/announcement` | Create an announcement with live preview, embed toggle, and role ping | Admin/Trusted |
-| `/edit_say` | Edit a previously sent bot announcement | Admin/Trusted |
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/setup_logs` | `[auto_create]` `[type]` `[#channel]` | Staff | Create or map audit log channels |
 
 ### Admin / System
 
-| Command | Description | Access |
-|---|---|---|
-| `/sync` | Manually sync the global slash command tree | Admin/Trusted |
-| `/botstatus` | Live health dashboard — RAM, CPU, gateway, RSS, WebSub status | Admin/Trusted |
-| `/about` | Public bot profile with live stats | Public |
-| `/help` | Interactive categorized help menu | Public |
-| `/trust add/remove/list` | Manage trusted users for admin commands | Owner |
-
-### Content Type Filters
-
-When running `/add_yt`, the `types` parameter accepts:
-
-| Value | What it tracks |
-|---|---|
-| `all` | Everything (default) |
-| `videos` | Standard uploads only |
-| `shorts` | YouTube Shorts only |
-| `live` | Live streams only |
-| `community` | Community posts only |
+| Command | Parameters | Permission | Description |
+|---|---|---|---|
+| `/trust add` | `@user` | Staff | Grant trusted access in this server |
+| `/trust remove` | `@user` | Staff | Revoke trusted access |
+| `/trust list` | — | Staff | List trusted users |
+| `/sync` | — | Staff | Sync global slash command tree |
+| `/botstatus` | — | Staff | Live health dashboard |
+| `/about` | — | Public | Bot profile with live stats |
+| `/help` | — | Public | Interactive categorized help menu |
 
 ---
 
 ## Server Audit Logging
 
-Run `/setup_logs auto_create:True` to automatically create the **📁 SERVER LOGS** category with 8 channels:
+Run `/setup_logs auto_create:True` to create the **📁 SERVER LOGS** category with 8 channels:
 
-| Channel | Events logged |
+| Channel | Events |
 |---|---|
 | `#chat-logs` | Message edits, deletes, bulk deletes |
 | `#member-logs` | Joins, leaves, bans, kicks, timeouts |
 | `#profile-logs` | Username, avatar, nickname changes |
 | `#role-logs` | Role creates, deletes, permission edits |
 | `#channel-logs` | Channel creates, deletes, edits |
-| `#server-logs` | Server setting changes, emoji/sticker events |
-| `#voice-logs` | Voice join, leave, move, mute, deaff events |
-| `#mod-logs` | Moderation actions from audit log |
+| `#server-logs` | Server settings, emoji/sticker events |
+| `#voice-logs` | Voice join, leave, move, mute, deafen |
+| `#moderation-logs` | Moderation actions from audit log |
 
-Log channel registrations **auto-restore** after Railway redeploys — the bot scans Discord for the existing `📁 SERVER LOGS` category and re-registers all channel IDs automatically.
+Log channel registrations **auto-restore** after Railway redeploys.
 
 ---
 
@@ -209,62 +240,54 @@ Log channel registrations **auto-restore** after Railway redeploys — the bot s
                                    Re-subscribes at T-24h before expiry
 ```
 
+First push after a new subscription has 5–20 min Google hub latency (normal). The 60-second RSS fallback covers this window.
+
 ---
 
 ## Discord Application Setup
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application → **Bot** tab → Enable:
+2. Create application → **Bot** tab → Enable:
    - **Server Members Intent**
    - **Message Content Intent**
-   - **Presence Intent** (optional)
 3. Invite with scopes: `bot` + `applications.commands`
-4. Permissions needed: `Send Messages`, `Embed Links`, `Read Message History`, `View Channels`, `Manage Channels` (for `/setup_logs`), `View Audit Log` (for mod logging)
+4. Permissions: `Send Messages`, `Embed Links`, `Read Message History`, `View Channels`, `Manage Channels`, `Manage Messages`, `Ban Members`, `Kick Members`, `Moderate Members`, `View Audit Log`
 
 ---
 
 ## Security
 
-- `.env` and `*.db` files are excluded by `.gitignore` — never commit secrets
-- SSRF protection: all outbound HTTP fetches are restricted to allowlisted YouTube/Google hostnames
-- Mention injection prevention: YouTube content cannot inject `@everyone`, `<@role>`, or `<@user>` into notification messages
-- Audit log channels use `AllowedMentions.none()` — zero accidental pings in log channels
-- RBAC: admin commands restricted to bot owner, server owner, and trusted users via `/trust`
-- `SYNC_COMMANDS=false` by default — prevents Discord HTTP 429 rate limits on every restart
+- `.env` and `*.db` excluded by `.gitignore`
+- SSRF protection: all outbound HTTP restricted to YouTube/Google allowlist
+- Mention injection prevention: YouTube content cannot inject `@everyone` or role pings
+- WebSub push guard: rejects pushes from untracked channel IDs before classification
+- RBAC: admin commands gated by bot owner / server owner / trusted users
+- Demo mode: `DEMO_MODE=true` + `DEMO_GUILD_ID` intercepts all destructive actions
 
 ---
 
 ## Changelog
 
+### v3.2.0
+- New `cogs/moderation.py`: full moderation suite (`/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge`), prefix command equivalents (`!ban`, etc.), `/userinfo`, `/serverinfo`, `/permissions`, `/checkaccess`, `/broadcast` (up to 10 channels, GIF/image support), owner diagnostics (`/diagnose`, `/checkpermissions`, `/checkcommands`, `/testmoderation`, `/testmessage`), demo mode engine
+- `/help` updated: 7 categories covering all commands including new moderation and utility sections
+- `/about` footer now tracks live bot version
+
+### v3.1.2
+- Security hardening: WebSub challenge validation, push body size cap (512KB), safe lease_seconds parse
+- `poll_loop` and `resubscribe_loop` now have `on_error` handlers — unhandled exceptions no longer kill the loop
+
+### v3.1.1
+- `_send_notification` retries up to 3× on Discord 429 with exponential backoff
+
 ### v3.1.0
-- **Channel resolver fix** — `CHANNEL_ID_PATTERNS` reordered so `externalId` and `itemprop=channelId` are checked before the generic `channelId` JSON key, preventing connected brand accounts from hijacking the resolved channel ID
-- **WebSub push guard** — push handler now rejects untracked `<yt:channelId>` values before classification, blocking connected account notifications entirely
-- `resolve_channel_id` returns `(channel_id, name)` tuple with pattern-index logging for easier future diagnosis
-- `DESIGN.md` fully rewritten to reflect v3.x architecture
+- Channel resolver fix: `CHANNEL_ID_PATTERNS` reordered — `externalId` first, generic `channelId` last
+- WebSub push guard: rejects untracked channel IDs before oEmbed classification
 
 ### v3.0.0
-- **Full WebSub (PubSubHubbub) push engine** — replaced all HTML scrapers with Google's official push notification system
-- Embedded `aiohttp.web` HTTP server for webhook handling (GET challenge + POST Atom XML parser)
-- oEmbed content classification (video / short / live)
-- HEAD redirect detection for YouTube Shorts
-- WebSub lease auto-renewal (every 6h, renews at T-24h)
-- 60-second RSS fallback safety net alongside WebSub
-- `lease_expires_at` tracking in SQLite
-- Per-entry exception handling in push payload processor
-- `asyncio.ensure_future` done-callback for silent error detection
-
-### v2.3.0
-- Railway volume persistence for SQLite
-- Auto-restore of log channel registrations after redeploys
-- Exponential backoff for RSS 404 errors
-- Warmup seeding to prevent historical video spam on startup
-- Cross-type deduplication (same video_id not re-sent as both video and short)
-
-### v2.0.0
-- Multi-guild, multi-route YouTube tracking
-- 8-channel categorized server audit logging
-- `/announcement` with interactive preview and embed toggle
-- Trusted user RBAC system
+- Full WebSub push engine replacing all HTML scrapers
+- Embedded aiohttp.web server, oEmbed classification, lease auto-renewal
+- 60-second RSS fallback, per-entry push exception handling
 
 ---
 

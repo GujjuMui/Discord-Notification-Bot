@@ -56,7 +56,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "3.2.0"
+BOT_VERSION = "3.2.1"
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 
@@ -87,6 +87,7 @@ bot = commands.Bot(
 bot.bot_started_at = START_TIME
 bot.allowed_mentions = allowed_mentions
 bot.format_mentions = format_mentions
+bot.bot_version = BOT_VERSION
 
 tracker: Optional[YouTubeTracker] = None
 server_logger: Optional[ServerLogger] = None
