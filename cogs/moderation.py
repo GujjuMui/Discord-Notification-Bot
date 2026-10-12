@@ -1084,6 +1084,255 @@ class Moderation(commands.Cog):
             ephemeral=True,
         )
 
+    # ==================================================================
+    # SECTION 5 — PREFIX COMMANDS (!ban, !kick, etc.)
+    # All share the same pre-flight logic as the slash commands above.
+    # Usage examples:
+    #   !ban @user spamming
+    #   !kick @user rule violation
+    #   !timeout @user 30 being rude
+    #   !untimeout @user
+    #   !purge 20
+    #   !purge 10 @user
+    #   !userinfo @user
+    #   !serverinfo
+    # ==================================================================
+
+    async def _prefix_is_staff(self, ctx: commands.Context) -> bool:
+        """Return True if the ctx author has staff/owner access."""
+        if not ctx.guild:
+            return False
+        owner_id = config.BOT_OWNER_ID
+        if owner_id is None:
+            try:
+                app = await self.bot.application_info()
+                owner_id = app.owner.id if app.owner else None
+            except (discord.HTTPException, discord.Forbidden):
+                owner_id = None
+        return (
+            ctx.author.id == owner_id
+            or ctx.author.id == ctx.guild.owner_id
+            or db.is_trusted_user(ctx.guild.id, ctx.author.id)
+        )
+
+    async def _prefix_err(self, ctx: commands.Context, msg: str) -> None:
+        embed = discord.Embed(description=f"🚫 {msg}", color=discord.Color.red())
+        await ctx.send(embed=embed)
+
+    async def _prefix_ok(self, ctx: commands.Context, msg: str) -> None:
+        embed = discord.Embed(description=msg, color=discord.Color(0x34C759))
+        await ctx.send(embed=embed)
+
+    @commands.command(name="ban", help="Ban a member. Usage: !ban @user [reason]")
+    async def prefix_ban(
+        self,
+        ctx: commands.Context,
+        target: discord.Member,
+        *,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not await self._prefix_is_staff(ctx):
+            return await self._prefix_err(ctx, "You need staff/owner access to use this command.")
+        if not ctx.guild:
+            return
+        check = _preflight(ctx.guild, ctx.guild.me, target, "ban_members")
+        if not check:
+            return await self._prefix_err(ctx, check.reason)
+        if _is_demo(ctx.guild):
+            return await ctx.send(embed=_demo_embed("BAN", target, reason))
+        await ctx.guild.ban(target, reason=f"{ctx.author} — {reason}", delete_message_days=0)
+        await self._prefix_ok(ctx, f"✅ **{target}** has been banned.\nReason: {reason}")
+
+    @commands.command(name="kick", help="Kick a member. Usage: !kick @user [reason]")
+    async def prefix_kick(
+        self,
+        ctx: commands.Context,
+        target: discord.Member,
+        *,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not await self._prefix_is_staff(ctx):
+            return await self._prefix_err(ctx, "You need staff/owner access to use this command.")
+        if not ctx.guild:
+            return
+        check = _preflight(ctx.guild, ctx.guild.me, target, "kick_members")
+        if not check:
+            return await self._prefix_err(ctx, check.reason)
+        if _is_demo(ctx.guild):
+            return await ctx.send(embed=_demo_embed("KICK", target, reason))
+        await ctx.guild.kick(target, reason=f"{ctx.author} — {reason}")
+        await self._prefix_ok(ctx, f"✅ **{target}** has been kicked.\nReason: {reason}")
+
+    @commands.command(name="timeout", help="Timeout a member. Usage: !timeout @user <minutes> [reason]")
+    async def prefix_timeout(
+        self,
+        ctx: commands.Context,
+        target: discord.Member,
+        duration: int,
+        *,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not await self._prefix_is_staff(ctx):
+            return await self._prefix_err(ctx, "You need staff/owner access to use this command.")
+        if not ctx.guild:
+            return
+        if not 1 <= duration <= 40320:
+            return await self._prefix_err(ctx, "Duration must be between 1 and 40320 minutes (28 days).")
+        check = _preflight(ctx.guild, ctx.guild.me, target, "moderate_members")
+        if not check:
+            return await self._prefix_err(ctx, check.reason)
+        if _is_demo(ctx.guild):
+            return await ctx.send(embed=_demo_embed(f"TIMEOUT ({duration}m)", target, reason))
+        until = discord.utils.utcnow() + timedelta(minutes=duration)
+        await target.timeout(until, reason=f"{ctx.author} — {reason}")
+        await self._prefix_ok(ctx, f"✅ **{target}** timed out for **{duration} minute(s)**.\nReason: {reason}")
+
+    @commands.command(name="untimeout", help="Remove timeout. Usage: !untimeout @user [reason]")
+    async def prefix_untimeout(
+        self,
+        ctx: commands.Context,
+        target: discord.Member,
+        *,
+        reason: str = "No reason provided",
+    ) -> None:
+        if not await self._prefix_is_staff(ctx):
+            return await self._prefix_err(ctx, "You need staff/owner access to use this command.")
+        if not ctx.guild:
+            return
+        check = _preflight(ctx.guild, ctx.guild.me, target, "moderate_members")
+        if not check:
+            return await self._prefix_err(ctx, check.reason)
+        if target.timed_out_until is None:
+            return await self._prefix_err(ctx, f"**{target}** is not currently timed out.")
+        await target.timeout(None, reason=f"{ctx.author} — {reason}")
+        await self._prefix_ok(ctx, f"✅ Timeout removed from **{target}**.\nReason: {reason}")
+
+    @commands.command(name="purge", help="Bulk delete messages. Usage: !purge <amount> [@user]")
+    async def prefix_purge(
+        self,
+        ctx: commands.Context,
+        amount: int,
+        filter_user: Optional[discord.Member] = None,
+    ) -> None:
+        if not await self._prefix_is_staff(ctx):
+            return await self._prefix_err(ctx, "You need staff/owner access to use this command.")
+        if not ctx.guild or not isinstance(ctx.channel, discord.TextChannel):
+            return await self._prefix_err(ctx, "Must be used in a server text channel.")
+        if not 1 <= amount <= 100:
+            return await self._prefix_err(ctx, "Amount must be between 1 and 100.")
+        if not ctx.guild.me.guild_permissions.manage_messages:
+            return await self._prefix_err(ctx, "Bot is missing `manage_messages` permission.")
+        if _is_demo(ctx.guild):
+            embed = discord.Embed(
+                title="🧪 [SIMULATED DEMO MODE — NO REAL ACTION TAKEN]",
+                description=f"**Action:** PURGE {amount} messages"
+                + (f" from {filter_user.mention}" if filter_user else ""),
+                color=discord.Color.orange(),
+            )
+            return await ctx.send(embed=embed)
+
+        # Delete the invoking command message too
+        await ctx.message.delete()
+
+        cutoff = discord.utils.utcnow() - timedelta(days=14)
+
+        def check_msg(m: discord.Message) -> bool:
+            if m.created_at < cutoff:
+                return False
+            if filter_user and m.author.id != filter_user.id:
+                return False
+            return True
+
+        deleted = await ctx.channel.purge(limit=amount, check=check_msg)
+        confirm = await ctx.send(
+            embed=discord.Embed(
+                description=f"✅ Deleted **{len(deleted)}** message(s)"
+                + (f" from {filter_user.mention}" if filter_user else "")
+                + ".\n*Messages older than 14 days were skipped.*",
+                color=discord.Color(0x34C759),
+            )
+        )
+        await asyncio.sleep(5)
+        await confirm.delete()
+
+    @commands.command(name="userinfo", help="Show member info. Usage: !userinfo [@user]")
+    async def prefix_userinfo(
+        self,
+        ctx: commands.Context,
+        target: Optional[discord.Member] = None,
+    ) -> None:
+        if not ctx.guild:
+            return
+        member = target or ctx.author
+        if not isinstance(member, discord.Member):
+            return await self._prefix_err(ctx, "Could not resolve member.")
+
+        created = discord.utils.format_dt(member.created_at, "F")
+        joined = discord.utils.format_dt(member.joined_at, "F") if member.joined_at else "Unknown"
+        roles = [r.mention for r in reversed(member.roles) if r.name != "@everyone"]
+        sorted_roles = sorted(
+            [r for r in ctx.guild.roles if r.name != "@everyone"],
+            key=lambda r: r.position, reverse=True,
+        )
+        rank = next(
+            (i + 1 for i, r in enumerate(sorted_roles) if r in member.roles),
+            len(sorted_roles),
+        )
+        flags = [f.name.replace("_", " ").title() for f, val in member.public_flags if val]
+
+        embed = discord.Embed(
+            title=str(member),
+            color=member.color if member.color.value else discord.Color.blurple(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
+        embed.add_field(name="Bot", value="Yes" if member.bot else "No", inline=True)
+        embed.add_field(name="Hierarchy Rank", value=f"#{rank} of {len(sorted_roles)}", inline=True)
+        embed.add_field(name="Account Created", value=created, inline=False)
+        embed.add_field(name="Joined Server", value=joined, inline=False)
+        embed.add_field(name="Roles", value=" ".join(roles[:20]) or "None", inline=False)
+        if flags:
+            embed.add_field(name="Badges", value=", ".join(flags), inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="serverinfo", help="Show server info. Usage: !serverinfo")
+    async def prefix_serverinfo(self, ctx: commands.Context) -> None:
+        if not ctx.guild:
+            return
+        guild = ctx.guild
+        owner = guild.owner or await self.bot.fetch_user(guild.owner_id)
+        embed = discord.Embed(
+            title=guild.name,
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        embed.add_field(name="ID", value=f"`{guild.id}`", inline=True)
+        embed.add_field(name="Owner", value=str(owner), inline=True)
+        embed.add_field(name="Members", value=str(guild.member_count), inline=True)
+        embed.add_field(name="Boost Level", value=f"Level {guild.premium_tier}", inline=True)
+        embed.add_field(name="Verification", value=str(guild.verification_level).title(), inline=True)
+        await ctx.send(embed=embed)
+
+    # Error handler for prefix command argument failures
+    @prefix_ban.error
+    @prefix_kick.error
+    @prefix_timeout.error
+    @prefix_untimeout.error
+    @prefix_purge.error
+    @prefix_userinfo.error
+    async def prefix_mod_error(self, ctx: commands.Context, error: Exception) -> None:
+        if isinstance(error, commands.MemberNotFound):
+            await self._prefix_err(ctx, f"Member not found: `{error.argument}`. Use a @mention or user ID.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await self._prefix_err(ctx, f"Missing argument: `{error.param.name}`. Check `!help {ctx.command.name}`.")
+        elif isinstance(error, commands.BadArgument):
+            await self._prefix_err(ctx, f"Invalid argument: {error}")
+        else:
+            await self._prefix_err(ctx, f"An error occurred: {error}")
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))
