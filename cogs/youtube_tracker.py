@@ -817,19 +817,23 @@ class YouTubeTracker(commands.Cog):
                     await self._dispatch_activity(yt_channel_id, feed_items, subscriptions)
 
                 except aiohttp.ClientResponseError as exc:
-                    if exc.status == 404:
+                    if exc.status in (404, 500, 502, 503):
+                        # Treat server-side errors (404, 5xx) the same as 404 —
+                        # exponential backoff to avoid hammering YouTube during
+                        # CDN instability. These are transient and self-recover.
                         fails = self._rss_fail_count.get(yt_channel_id, 0) + 1
                         self._rss_fail_count[yt_channel_id] = fails
                         skip_cycles = min(2 ** (fails - 1), 16)
                         self._rss_skip_until[yt_channel_id] = self._poll_cycle + skip_cycles
                         logger.warning(
-                            "[RSS Fallback] 404 for %s (fail #%d). "
+                            "[RSS Fallback] HTTP %d for %s (fail #%d). "
                             "Backing off %d cycle(s).",
-                            yt_channel_id, fails, skip_cycles,
+                            exc.status, yt_channel_id, fails, skip_cycles,
                         )
                     else:
-                        logger.exception(
-                            "[RSS Fallback] HTTP error for %s", yt_channel_id
+                        logger.error(
+                            "[RSS Fallback] HTTP %d error for %s — will retry next cycle.",
+                            exc.status, yt_channel_id,
                         )
                 except Exception:
                     logger.exception(
