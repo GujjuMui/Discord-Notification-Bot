@@ -18,6 +18,7 @@ from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
 from cogs.utility import Utility
 from cogs.moderation import Moderation
+from cogs.channel_manager import ChannelManager
 from utils.helpers import format_mentions
 
 LOG_DIR = config.PROJECT_ROOT / "logs"
@@ -148,6 +149,9 @@ async def setup_bot() -> None:
 
     moderation = Moderation(bot)
     await bot.add_cog(moderation)
+
+    channel_manager = ChannelManager(bot)
+    await bot.add_cog(channel_manager)
 
     setup_commands(bot, tracker)
     logger.info("Bot setup complete.")
