@@ -170,6 +170,7 @@ The bot exposes `GET /health` → `200 OK` used by Railway's healthcheck (`railw
 | Command | Parameters | Permission | Description |
 |---|---|---|---|
 | `/channelmanager` | — | Owner | Guild picker → list / create / delete channels across any guild from DMs. Requires `Manage Channels` in target guild. |
+| `/leaveguild` | — | Owner | Guild picker dropdown → confirm → bot leaves the selected server immediately |
 
 ### Diagnostics (Owner-Only)
 

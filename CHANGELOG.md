@@ -5,6 +5,20 @@ Format: `[version] — date — summary`
 
 ---
 
+## [3.3.1] — 2026-10-12
+
+### Added
+- **`/leaveguild`** (owner-only, DM-compatible) — guild picker dropdown → confirmation dialog → bot leaves the selected server immediately
+- **`/permaudit`** (owner-only) — cross-guild permission audit showing ✅ fully authorized guilds vs ⚠️ guilds missing specific permissions (send, embed, ban, kick, timeout, manage channels, audit log, create invite); paginated embeds with fix instructions
+- **`/channelmanager`** now wired into `main.py` as a proper cog
+
+### Changed
+- Help menu expanded to 9 categories: added 🏗️ Channel Manager and 👑 Owner Tools with full command docs
+- Owner check security audit: all 9 owner-only commands confirmed to use identical strict check (BOT_OWNER_ID → application_info() fallback, fail-closed on error)
+- README: updated command reference with `/permaudit`, `/leaveguild`, `/channelmanager`, `/listyt_all`, `/guildlist`
+
+---
+
 ## [3.3.0] — 2026-10-12
 
 ### Added
