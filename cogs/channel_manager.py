@@ -404,6 +404,85 @@ class CreateChannelModal(discord.ui.Modal, title="Create Channel"):
 # Cog
 # ---------------------------------------------------------------------------
 
+class LeaveGuildView(discord.ui.View):
+    """Guild picker + confirm for /leaveguild."""
+
+    def __init__(
+        self,
+        options: list[discord.SelectOption],
+        owner_id: int,
+        bot: commands.Bot,
+    ):
+        super().__init__(timeout=60)
+        self._owner_id = owner_id
+        self._bot = bot
+        self._selected_guild: Optional[discord.Guild] = None
+
+        select = discord.ui.Select(
+            placeholder="Select guild to leave…",
+            options=options,
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self._owner_id
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        guild_id = int(interaction.data["values"][0])  # type: ignore[index]
+        guild = self._bot.get_guild(guild_id)
+        if guild is None:
+            await interaction.response.edit_message(
+                content="Guild not found.", view=None
+            )
+            return
+        self._selected_guild = guild
+        await interaction.response.edit_message(
+            content=(
+                f"⚠️ **Confirm leaving** **{guild.name}** (`{guild.id}`)?\n"
+                f"Members: {guild.member_count}\n"
+                "The bot will leave immediately. This cannot be undone from within that server."
+            ),
+            view=ConfirmLeaveView(guild, self._owner_id),
+        )
+
+
+class ConfirmLeaveView(discord.ui.View):
+    """Final confirmation before leaving a guild."""
+
+    def __init__(self, guild: discord.Guild, owner_id: int):
+        super().__init__(timeout=30)
+        self._guild    = guild
+        self._owner_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self._owner_id
+
+    @discord.ui.button(label="✅ Yes, leave", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        guild_name = self._guild.name
+        guild_id   = self._guild.id
+        try:
+            await self._guild.leave()
+            await interaction.response.edit_message(
+                content=f"✅ Left **{guild_name}** (`{guild_id}`).", view=None
+            )
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            await interaction.response.edit_message(
+                content=f"❌ Could not leave **{guild_name}**: {exc}", view=None
+            )
+        self.stop()
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+        self.stop()
+
+
 class ChannelManager(commands.Cog):
     """Owner-only channel management from DMs."""
 
@@ -431,6 +510,37 @@ class ChannelManager(commands.Cog):
         view = GuildPickerView(guilds[:25], interaction.user.id)
         await interaction.followup.send(
             f"**Channel Manager** — pick a guild to manage:{note}",
+            view=view,
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="leaveguild",
+        description="[Owner] Make the bot leave a guild. Use from DMs.",
+    )
+    @_owner_only()
+    async def leaveguild(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        guilds = sorted(self.bot.guilds, key=lambda g: g.name.lower())
+        if not guilds:
+            await interaction.followup.send("Bot is not in any guilds.", ephemeral=True)
+            return
+
+        note = f"\n*Showing first 25 of {len(guilds)} guilds.*" if len(guilds) > 25 else ""
+
+        options = [
+            discord.SelectOption(
+                label=g.name[:100],
+                value=str(g.id),
+                description=f"{g.member_count} members • ID: {g.id}",
+            )
+            for g in guilds[:25]
+        ]
+
+        view = LeaveGuildView(options, interaction.user.id, self.bot)
+        await interaction.followup.send(
+            f"**Leave Guild** — select a guild to leave:{note}",
             view=view,
             ephemeral=True,
         )
