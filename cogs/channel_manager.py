@@ -652,6 +652,9 @@ class ConfirmLeaveView(discord.ui.View):
 class ChannelManager(commands.Cog):
     """Owner-only channel management from DMs."""
 
+    # Allow all commands in this cog to be used in DMs (no guild context required)
+    guild_only = False
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -659,6 +662,8 @@ class ChannelManager(commands.Cog):
         name="channelmanager",
         description="[Owner] Manage channels across any guild from DMs.",
     )
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=False)
     @_owner_only()
     async def channelmanager(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -684,6 +689,8 @@ class ChannelManager(commands.Cog):
         name="leaveguild",
         description="[Owner] Make the bot leave a guild. Use from DMs.",
     )
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=False)
     @_owner_only()
     @app_commands.describe(
         guild_id="Guild ID to leave directly. Leave empty to use the dropdown picker.",
@@ -747,6 +754,8 @@ class ChannelManager(commands.Cog):
         name="requestperms",
         description="[Owner] DM server owners requesting Administrator permission for the bot.",
     )
+    @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
+    @app_commands.allowed_installs(guilds=True, users=False)
     @_owner_only()
     @app_commands.describe(
         guild_id="Specific guild ID to target (leave empty to target ALL guilds missing perms).",
