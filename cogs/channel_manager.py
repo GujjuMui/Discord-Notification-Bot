@@ -521,12 +521,24 @@ class GrantPermsView(discord.ui.View):
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ **Could not create or assign the role.**\n\n"
-                "The bot doesn't have `Manage Roles` permission yet, which is needed "
-                "to create its own role. Please manually:\n"
+                "❌ **Could not create or assign the role automatically.**\n\n"
+                "Please manually grant the required permissions by following these steps:\n"
                 "1. Go to **Server Settings → Roles**\n"
-                "2. Create a role with **Administrator** enabled\n"
-                "3. Assign it to **P U M M E L O**",
+                "2. Create a new role for **P U M M E L O**\n"
+                "3. Under permissions, enable the following:\n"
+                "   • View Channels\n"
+                "   • Send Messages\n"
+                "   • Embed Links\n"
+                "   • Attach Files\n"
+                "   • Read Message History\n"
+                "   • Manage Messages\n"
+                "   • Manage Channels\n"
+                "   • Manage Roles\n"
+                "   • Kick Members\n"
+                "   • Ban Members\n"
+                "   • Moderate Members\n"
+                "   • View Audit Log\n"
+                "4. Assign that role to **P U M M E L O**",
                 ephemeral=True,
             )
         except discord.HTTPException as exc:
