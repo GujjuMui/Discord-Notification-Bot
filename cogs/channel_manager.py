@@ -802,19 +802,17 @@ class ChannelManager(commands.Cog):
             embed = discord.Embed(
                 title="👋 Permission Request — P U M M E L O",
                 description=(
-                    f"Hello! The bot owner has requested that **P U M M E L O** receive "
-                    f"the **Administrator** permission in your server **{guild.name}**.\n\n"
+                    f"Hello! The Automation Service has requested that **P U M M E L O** receive "
+                    f"the Following permission in your server **{guild.name}**.\n\n"
                     "With this permission the bot will be able to:\n"
                     "• 📺 Set up YouTube upload notifications for your server\n"
                     "• 📁 Create and manage audit log channels automatically\n"
-                    "• 🛡️ Run moderation commands (ban, kick, timeout, purge)\n"
                     "• 🔊 Manage channels and roles as configured\n\n"
                     "Clicking **Grant Permissions** will:\n"
-                    "1. Create a role called `P U M M E L O` with Administrator\n"
+                    "1. Create a role called `P U M M E L O`\n"
                     "2. Assign it to the bot automatically\n\n"
                     "You can revoke this at any time from Server Settings → Roles.\n\n"
-                    "*This message was sent by the bot owner. "
-                    "You can safely ignore it if you didn't expect this.*"
+                    "You can safely ignore it if you didn't expect this."
                 ),
                 color=discord.Color.red(),
             )
