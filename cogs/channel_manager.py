@@ -685,16 +685,49 @@ class ChannelManager(commands.Cog):
         description="[Owner] Make the bot leave a guild. Use from DMs.",
     )
     @_owner_only()
-    async def leaveguild(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        guild_id="Guild ID to leave directly. Leave empty to use the dropdown picker.",
+    )
+    async def leaveguild(
+        self,
+        interaction: discord.Interaction,
+        guild_id: Optional[str] = None,
+    ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        guilds = sorted(self.bot.guilds, key=lambda g: g.name.lower())
-        if not guilds:
-            await interaction.followup.send("Bot is not in any guilds.", ephemeral=True)
+        # Direct ID path — skip the dropdown
+        if guild_id:
+            try:
+                gid = int(guild_id.strip())
+            except ValueError:
+                return await interaction.followup.send(
+                    "guild_id must be numeric.", ephemeral=True
+                )
+            guild = self.bot.get_guild(gid)
+            if guild is None:
+                return await interaction.followup.send(
+                    f"❌ Guild `{gid}` not found — bot may not be in that server.",
+                    ephemeral=True,
+                )
+            try:
+                await guild.leave()
+                await interaction.followup.send(
+                    f"✅ Left **{guild.name}** (`{guild.id}`).", ephemeral=True
+                )
+            except (discord.HTTPException, discord.Forbidden) as exc:
+                await interaction.followup.send(
+                    f"❌ Could not leave **{guild.name}**: {exc}", ephemeral=True
+                )
             return
 
-        note = f"\n*Showing first 25 of {len(guilds)} guilds.*" if len(guilds) > 25 else ""
+        # Dropdown path
+        guilds = sorted(self.bot.guilds, key=lambda g: g.name.lower())
+        if not guilds:
+            return await interaction.followup.send(
+                "Bot is not in any guilds.", ephemeral=True
+            )
 
+        note = f"\n*Showing first 25 of {len(guilds)} guilds.*" if len(guilds) > 25 else ""
         options = [
             discord.SelectOption(
                 label=g.name[:100],
@@ -703,7 +736,6 @@ class ChannelManager(commands.Cog):
             )
             for g in guilds[:25]
         ]
-
         view = LeaveGuildView(options, interaction.user.id, self.bot)
         await interaction.followup.send(
             f"**Leave Guild** — select a guild to leave:{note}",
