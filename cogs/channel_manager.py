@@ -400,6 +400,172 @@ class CreateChannelModal(discord.ui.Modal, title="Create Channel"):
         )
 
 
+class GrantPermsView(discord.ui.View):
+    """Sent to the server owner — one click grants Administrator to the bot."""
+
+    def __init__(
+        self,
+        guild: discord.Guild,
+        owner_id: int,
+        bot_owner_id: int,
+        bot: commands.Bot,
+    ):
+        # 48-hour timeout — long enough for async server owners
+        super().__init__(timeout=172800)
+        self._guild        = guild
+        self._owner_id     = owner_id
+        self._bot_owner_id = bot_owner_id
+        self._bot          = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._owner_id:
+            await interaction.response.send_message(
+                "This request is not for you.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Grant Permissions", style=discord.ButtonStyle.success)
+    async def grant(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer()
+
+        guild = self._bot.get_guild(self._guild.id)
+        if guild is None:
+            await interaction.followup.send(
+                "❌ Could not find the server — the bot may have been removed.", ephemeral=True
+            )
+            self.stop()
+            return
+
+        bot_member = guild.me
+        if bot_member is None:
+            await interaction.followup.send(
+                "❌ Bot is not in that server anymore.", ephemeral=True
+            )
+            self.stop()
+            return
+
+        # Check if bot already has Administrator
+        if bot_member.guild_permissions.administrator:
+            await interaction.followup.send(
+                f"✅ **P U M M E L O** already has Administrator in **{guild.name}**.",
+                ephemeral=True,
+            )
+            self.stop()
+            return
+
+        # Try to find an existing role owned by the bot or named "P U M M E L O"
+        existing_role = discord.utils.find(
+            lambda r: r.name == "P U M M E L O" and r.managed,
+            guild.roles,
+        ) or discord.utils.find(
+            lambda r: r.name == "P U M M E L O",
+            guild.roles,
+        )
+
+        try:
+            if existing_role:
+                # Update existing role to have Administrator
+                await existing_role.edit(
+                    permissions=discord.Permissions(administrator=True),
+                    reason="P U M M E L O permission request — approved by server owner",
+                )
+                role = existing_role
+            else:
+                # Create new role
+                role = await guild.create_role(
+                    name="P U M M E L O",
+                    permissions=discord.Permissions(administrator=True),
+                    color=discord.Color.red(),
+                    reason="P U M M E L O permission request — approved by server owner",
+                )
+
+            # Assign role to bot member
+            await bot_member.add_roles(
+                role,
+                reason="P U M M E L O permission request — approved by server owner",
+            )
+
+            # Disable buttons
+            for child in self.children:
+                child.disabled = True
+
+            success_embed = discord.Embed(
+                title="✅ Permissions Granted",
+                description=(
+                    f"**P U M M E L O** now has Administrator in **{guild.name}**.\n\n"
+                    f"Role created/updated: `{role.name}` (`{role.id}`)\n\n"
+                    "The bot will now be able to set up YouTube notifications, "
+                    "audit logging, and moderation for your server.\n\n"
+                    "You can manage or revoke this role at any time from "
+                    "**Server Settings → Roles**."
+                ),
+                color=discord.Color(0x34C759),
+            )
+            await interaction.followup.send(embed=success_embed)
+
+            # Notify the bot owner
+            try:
+                bot_owner = await self._bot.fetch_user(self._bot_owner_id)
+                await bot_owner.send(
+                    f"✅ **Permission request accepted**\n"
+                    f"**Server:** {guild.name} (`{guild.id}`)\n"
+                    f"**Owner:** {interaction.user} (`{interaction.user.id}`)\n"
+                    f"**Role:** `{role.name}` (`{role.id}`)\n"
+                    f"Bot now has Administrator in that server."
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ **Could not create or assign the role.**\n\n"
+                "The bot doesn't have `Manage Roles` permission yet, which is needed "
+                "to create its own role. Please manually:\n"
+                "1. Go to **Server Settings → Roles**\n"
+                "2. Create a role with **Administrator** enabled\n"
+                "3. Assign it to **P U M M E L O**",
+                ephemeral=True,
+            )
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"❌ An error occurred: {exc}", ephemeral=True
+            )
+
+        self.stop()
+
+    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.secondary)
+    async def decline(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="You declined the permission request. No changes were made.",
+            view=self,
+        )
+
+        # Notify bot owner of decline
+        try:
+            bot_owner = await self._bot.fetch_user(self._bot_owner_id)
+            await bot_owner.send(
+                f"❌ **Permission request declined**\n"
+                f"**Server:** {self._guild.name} (`{self._guild.id}`)\n"
+                f"**Owner:** {interaction.user} (`{interaction.user.id}`)"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        # Buttons expire silently — no followup possible after timeout
+        for child in self.children:
+            child.disabled = True
+
+
 # ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
@@ -542,6 +708,106 @@ class ChannelManager(commands.Cog):
         await interaction.followup.send(
             f"**Leave Guild** — select a guild to leave:{note}",
             view=view,
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="requestperms",
+        description="[Owner] DM server owners requesting Administrator permission for the bot.",
+    )
+    @_owner_only()
+    @app_commands.describe(
+        guild_id="Specific guild ID to target (leave empty to target ALL guilds missing perms).",
+    )
+    async def requestperms(
+        self,
+        interaction: discord.Interaction,
+        guild_id: Optional[str] = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        # Resolve target guilds
+        if guild_id:
+            try:
+                target = self.bot.get_guild(int(guild_id))
+            except ValueError:
+                return await interaction.followup.send(
+                    "guild_id must be numeric.", ephemeral=True
+                )
+            if not target:
+                return await interaction.followup.send(
+                    f"Guild `{guild_id}` not found.", ephemeral=True
+                )
+            targets = [target]
+        else:
+            # All guilds where bot is missing Administrator
+            targets = [
+                g for g in self.bot.guilds
+                if g.me and not g.me.guild_permissions.administrator
+            ]
+
+        if not targets:
+            return await interaction.followup.send(
+                "✅ Bot already has Administrator in all guilds.", ephemeral=True
+            )
+
+        sent_ok:   list[str] = []
+        sent_fail: list[str] = []
+
+        for guild in targets:
+            owner_id = guild.owner_id
+            if owner_id is None:
+                sent_fail.append(f"{guild.name} (`{guild.id}`) — no owner ID")
+                continue
+
+            try:
+                owner = await self.bot.fetch_user(owner_id)
+            except (discord.NotFound, discord.HTTPException):
+                sent_fail.append(f"{guild.name} (`{guild.id}`) — could not fetch owner")
+                continue
+
+            # Build the request embed
+            embed = discord.Embed(
+                title="👋 Permission Request — P U M M E L O",
+                description=(
+                    f"Hello! The bot owner has requested that **P U M M E L O** receive "
+                    f"the **Administrator** permission in your server **{guild.name}**.\n\n"
+                    "With this permission the bot will be able to:\n"
+                    "• 📺 Set up YouTube upload notifications for your server\n"
+                    "• 📁 Create and manage audit log channels automatically\n"
+                    "• 🛡️ Run moderation commands (ban, kick, timeout, purge)\n"
+                    "• 🔊 Manage channels and roles as configured\n\n"
+                    "Clicking **Grant Permissions** will:\n"
+                    "1. Create a role called `P U M M E L O` with Administrator\n"
+                    "2. Assign it to the bot automatically\n\n"
+                    "You can revoke this at any time from Server Settings → Roles.\n\n"
+                    "*This message was sent by the bot owner. "
+                    "You can safely ignore it if you didn't expect this.*"
+                ),
+                color=discord.Color.red(),
+            )
+            embed.set_footer(text="P U M M E L O • YouTube Notification Bot")
+
+            view = GrantPermsView(guild, owner_id, interaction.user.id, self.bot)
+            try:
+                await owner.send(embed=embed, view=view)
+                sent_ok.append(f"{guild.name} (`{guild.id}`) → {owner}")
+            except discord.Forbidden:
+                sent_fail.append(f"{guild.name} (`{guild.id}`) — owner has DMs closed")
+            except discord.HTTPException as exc:
+                sent_fail.append(f"{guild.name} (`{guild.id}`) — {exc}")
+
+        # Report back to bot owner
+        result_lines = []
+        if sent_ok:
+            result_lines.append(f"✅ **DM sent to {len(sent_ok)} server owner(s):**")
+            result_lines.extend(f"  • {line}" for line in sent_ok)
+        if sent_fail:
+            result_lines.append(f"\n❌ **Failed ({len(sent_fail)}):**")
+            result_lines.extend(f"  • {line}" for line in sent_fail)
+
+        await interaction.followup.send(
+            "\n".join(result_lines) or "No guilds processed.",
             ephemeral=True,
         )
 
