@@ -24,8 +24,8 @@ AUDIT_LOG_PATH = config.PROJECT_ROOT / "logs" / "audit_history.log"
 AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 _handler = RotatingFileHandler(
     AUDIT_LOG_PATH,
-    maxBytes=10 * 1024 * 1024,
-    backupCount=5,
+    maxBytes=config.LOG_MAX_BYTES,
+    backupCount=config.LOG_BACKUP_COUNT,
     encoding="utf-8",
 )
 _handler.setFormatter(
@@ -35,16 +35,7 @@ if not any(isinstance(item, RotatingFileHandler) for item in logger.handlers):
     logger.addHandler(_handler)
 
 
-LOG_CHANNEL_NAMES = {
-    "chat": "chat-logs",
-    "member": "member-logs",
-    "profile": "profile-logs",
-    "role": "role-logs",
-    "channel": "channel-logs",
-    "server": "server-logs",
-    "voice": "voice-logs",
-    "mod": "moderation-logs",
-}
+LOG_CHANNEL_NAMES = config.LOG_CHANNEL_NAMES
 
 LOG_COLUMNS = {
     "chat": "chat_log_id",
@@ -98,8 +89,8 @@ class ServerLogger(commands.Cog):
     @tasks.loop(hours=24)
     async def message_retention_cleanup(self) -> None:
         try:
-            removed = db.cleanup_old_messages(days=30)
-            logger.info("Message retention cleanup removed %d cached messages older than 30 days.", removed)
+            removed = db.cleanup_old_messages(days=config.MESSAGE_RETENTION_DAYS)
+            logger.info("Message retention cleanup removed %d cached messages older than %d days.", removed, config.MESSAGE_RETENTION_DAYS)
         except Exception:
             logger.exception("Daily message retention cleanup failed.")
 
@@ -130,7 +121,7 @@ class ServerLogger(commands.Cog):
             return 0
 
         category = discord.utils.find(
-            lambda c: c.name == "📁 SERVER LOGS",
+            lambda c: c.name == config.LOG_CATEGORY_NAME,
             guild.categories,
         )
         if category is None:
@@ -166,8 +157,8 @@ class ServerLogger(commands.Cog):
         )
         logger.info(
             "[AutoRestore] Guild %s (%s): restored %d log channel(s) from "
-            "existing Discord category '📁 SERVER LOGS'.",
-            guild.name, guild.id, len(found),
+            "existing Discord category '%s'.",
+            guild.name, guild.id, len(found), config.LOG_CATEGORY_NAME,
         )
         return len(found)
 
@@ -213,14 +204,14 @@ class ServerLogger(commands.Cog):
             raise RuntimeError("The bot is not ready in this server.")
 
         category = discord.utils.find(
-            lambda c: c.name == "📁 SERVER LOGS",
+            lambda c: c.name == config.LOG_CATEGORY_NAME,
             guild.categories,
         )
 
         if auto_create:
             if category is None:
                 category = await guild.create_category(
-                    "📁 SERVER LOGS",
+                    config.LOG_CATEGORY_NAME,
                     reason="Server audit logging setup",
                 )
 

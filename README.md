@@ -2,7 +2,7 @@
 
 A production-grade Discord bot delivering **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, full **8-channel categorized server audit logging**, a **moderation suite** with pre-flight safety checks, and multi-channel **broadcast** announcements.
 
-**Version:** 3.3.0 | **Python:** 3.13 | **discord.py:** 2.7.1 | **Deployed on:** Railway
+**Version:** 3.3.1 | **Python:** 3.11+ | **discord.py:** 2.7.1 | **Deployed on:** Railway
 
 ---
 
@@ -60,6 +60,7 @@ Discord Notification Bot/
 ├── cogs/
 │   ├── youtube_tracker.py   # WebSub engine, RSS fallback, slash commands
 │   ├── server_logger.py     # 8-channel categorized audit logging
+│   ├── channel_manager.py   # Owner-only /channelmanager, /leaveguild, permission requests
 │   ├── utility.py           # /say, /announcement, /edit_say
 │   └── moderation.py        # Moderation suite, diagnostics, broadcast
 └── utils/
@@ -81,6 +82,10 @@ Copy `.env.example` to `.env` and fill in the values.
 | `WEBHOOK_URL` | Optional | — | Public HTTPS URL for WebSub push. e.g. `https://your-app.up.railway.app/youtube/webhook` |
 | `WEBHOOK_PORT` | Optional | `8080` | Port the embedded aiohttp webhook server listens on |
 | `FALLBACK_POLL_INTERVAL` | Optional | `60` | RSS fallback poll interval in seconds (min 60) |
+| `ALLOWED_GUILD_IDS` | Optional | `""` (open) | Comma-separated guild IDs to restrict bot operation |
+| `ENABLE_MODERATION` | Optional | `false` | Enable moderation cog |
+| `ENABLE_CHANNEL_MANAGER` | Optional | `false` | Enable channel manager cog |
+| `BOT_NAME` | Optional | `P U M M E L O` | Bot display name for permission requests and roles |
 | `DEMO_MODE` | Optional | `false` | Set `true` to enable demo/simulation mode |
 | `DEMO_GUILD_ID` | Optional | — | Guild ID where demo mode intercepts destructive actions |
 | `DEMO_AUDIT_LOG_CHANNEL` | Optional | — | Channel ID for demo mode audit log events |
@@ -277,6 +282,11 @@ First push after a new subscription has 5–20 min Google hub latency (normal). 
 ---
 
 ## Changelog
+
+### v3.3.1
+- Centralized all hardcoded configuration constants into `config.py` with environment variable overrides (`BOT_NAME`, `BOT_VERSION`, `WEBSUB_HUB_URL`, `WEBSUB_LEASE_SECONDS`, `WEBSUB_MAX_BODY_BYTES`, `LOG_CATEGORY_NAME`, `LOG_CHANNEL_NAMES`, `MESSAGE_RETENTION_DAYS`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT`)
+- Added `*.db-journal` to `.gitignore`
+- Added comprehensive documentation for all new environment variables in `.env.example` and `README.md`
 
 ### v3.2.0
 - New `cogs/moderation.py`: full moderation suite (`/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge`), prefix command equivalents (`!ban`, etc.), `/userinfo`, `/serverinfo`, `/permissions`, `/checkaccess`, `/broadcast` (up to 10 channels, GIF/image support), owner diagnostics (`/diagnose`, `/checkpermissions`, `/checkcommands`, `/testmoderation`, `/testmessage`), demo mode engine

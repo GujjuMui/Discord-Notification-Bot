@@ -28,8 +28,8 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 _file_handler = logging.handlers.RotatingFileHandler(
     LOG_DIR / "bot.log",
-    maxBytes=10 * 1024 * 1024,
-    backupCount=5,
+    maxBytes=config.LOG_MAX_BYTES,
+    backupCount=config.LOG_BACKUP_COUNT,
     encoding="utf-8",
 )
 _file_handler.setFormatter(
@@ -57,7 +57,7 @@ root_logger.addHandler(_console_handler)
 
 logger = logging.getLogger(__name__)
 
-BOT_VERSION = "3.3.1"
+BOT_VERSION = config.BOT_VERSION
 DEVELOPER_CREDIT = "GujjuMui"
 START_TIME = datetime.now(timezone.utc)
 

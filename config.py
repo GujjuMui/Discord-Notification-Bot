@@ -30,7 +30,10 @@ _db_value = Path(os.getenv("DATABASE_PATH", "youtube_bot.db"))
 DATABASE_PATH = _db_value if _db_value.is_absolute() else PROJECT_ROOT / _db_value
 
 SYNC_COMMANDS = os.getenv("SYNC_COMMANDS", "false").strip().lower() in {"true", "1"}
-HTTP_USER_AGENT = "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)"
+HTTP_USER_AGENT = os.getenv(
+    "HTTP_USER_AGENT",
+    "YouTube-Notification-Bot/1.0 (+https://github.com/GujjuMui/Discord-Notification-Bot)",
+)
 # Default 300 s (5 min) — keeps RSS polling well within free-tier rate limits.
 # Set POLL_INTERVAL=60 in .env only for testing; production should use 180–300.
 _poll_raw = os.getenv("POLL_INTERVAL", "300").strip()
@@ -40,6 +43,12 @@ except ValueError:
     POLL_INTERVAL = 300
 HTTP_TIMEOUT = 20
 BOT_PREFIX = "!"
+
+# Bot display name — used in permission request DMs and role creation.
+BOT_NAME: str = os.getenv("BOT_NAME", "P U M M E L O")
+
+# Bot version — single source of truth.
+BOT_VERSION: str = os.getenv("BOT_VERSION", "3.3.1")
 
 # ---------------------------------------------------------------------------
 # WebSub (PubSubHubbub) push engine
@@ -69,6 +78,26 @@ try:
     FALLBACK_POLL_INTERVAL: int = max(60, int(_fallback_raw))
 except ValueError:
     FALLBACK_POLL_INTERVAL = 60
+
+# WEBSUB_HUB_URL — Google's PubSubHubbub hub endpoint.
+#                  Only change this if Google migrates to a new hub URL.
+gitWEBSUB_HUB_URL: str = os.getenv("WEBSUB_HUB_URL", "https://pubsubhubbub.appspot.com/subscribe")
+
+# WEBSUB_LEASE_SECONDS — requested WebSub lease duration in seconds.
+#                        Default 604800 (7 days). Bot re-subscribes at T-24h.
+_lease_raw = os.getenv("WEBSUB_LEASE_SECONDS", "604800").strip()
+try:
+    WEBSUB_LEASE_SECONDS: int = max(3600, int(_lease_raw))
+except ValueError:
+    WEBSUB_LEASE_SECONDS = 604800
+
+# WEBSUB_MAX_BODY_BYTES — maximum push payload size accepted from Google.
+#                         Default 524288 (512 KB). Legitimate payloads are <10 KB.
+_body_raw = os.getenv("WEBSUB_MAX_BODY_BYTES", "524288").strip()
+try:
+    WEBSUB_MAX_BODY_BYTES: int = max(1024, int(_body_raw))
+except ValueError:
+    WEBSUB_MAX_BODY_BYTES = 524288
 
 
 def get_required_token() -> str:
@@ -106,8 +135,7 @@ ENABLE_CHANNEL_MANAGER: bool = os.getenv("ENABLE_CHANNEL_MANAGER", "false").stri
 #                     use bot commands.  Any guild not on this list will have
 #                     all slash commands and prefix commands blocked.
 #
-#                     If left empty, only guilds where the bot owner is a
-#                     member (determined at runtime) are permitted.
+#                     If left empty, all guilds are permitted (open mode).
 #
 #                     Example: ALLOWED_GUILD_IDS=123456789,987654321
 _allowed_raw = os.getenv("ALLOWED_GUILD_IDS", "").strip()
@@ -116,3 +144,48 @@ ALLOWED_GUILD_IDS: frozenset[int] = frozenset(
     for gid in _allowed_raw.split(",")
     if gid.strip().isdigit()
 )
+
+
+# ---------------------------------------------------------------------------
+# Server logging
+# ---------------------------------------------------------------------------
+# LOG_CATEGORY_NAME — name of the Discord category that houses audit log channels.
+#                     Default: '📁 SERVER LOGS'
+LOG_CATEGORY_NAME: str = os.getenv("LOG_CATEGORY_NAME", "📁 SERVER LOGS")
+
+# LOG_CHANNEL_NAMES — mapping of log type to Discord channel name.
+#                     Override individual names via LOG_CHANNEL_<TYPE> env vars.
+LOG_CHANNEL_NAMES: dict[str, str] = {
+    "chat":    os.getenv("LOG_CHANNEL_CHAT",    "chat-logs"),
+    "member":  os.getenv("LOG_CHANNEL_MEMBER",  "member-logs"),
+    "profile": os.getenv("LOG_CHANNEL_PROFILE", "profile-logs"),
+    "role":    os.getenv("LOG_CHANNEL_ROLE",    "role-logs"),
+    "channel": os.getenv("LOG_CHANNEL_CHANNEL", "channel-logs"),
+    "server":  os.getenv("LOG_CHANNEL_SERVER",  "server-logs"),
+    "voice":   os.getenv("LOG_CHANNEL_VOICE",   "voice-logs"),
+    "mod":     os.getenv("LOG_CHANNEL_MOD",     "moderation-logs"),
+}
+
+# MESSAGE_RETENTION_DAYS — how many days of messages to keep in the cache.
+#                          Default: 30 days.
+_retention_raw = os.getenv("MESSAGE_RETENTION_DAYS", "30").strip()
+try:
+    MESSAGE_RETENTION_DAYS: int = max(1, int(_retention_raw))
+except ValueError:
+    MESSAGE_RETENTION_DAYS = 30
+
+# LOG_MAX_BYTES — max size of each rotating log file before rotation.
+#                 Default: 10485760 (10 MB).
+_log_max_raw = os.getenv("LOG_MAX_BYTES", "10485760").strip()
+try:
+    LOG_MAX_BYTES: int = max(1024 * 1024, int(_log_max_raw))
+except ValueError:
+    LOG_MAX_BYTES = 10 * 1024 * 1024
+
+# LOG_BACKUP_COUNT — number of rotated log file backups to keep.
+#                    Default: 5.
+_log_backup_raw = os.getenv("LOG_BACKUP_COUNT", "5").strip()
+try:
+    LOG_BACKUP_COUNT: int = max(1, int(_log_backup_raw))
+except ValueError:
+    LOG_BACKUP_COUNT = 5

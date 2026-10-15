@@ -95,10 +95,10 @@ _YT_NS  = "http://www.youtube.com/xml/schemas/2015"
 _ATOM_NS = "http://www.w3.org/2005/Atom"
 
 # WebSub hub endpoint
-_WEBSUB_HUB = "https://pubsubhubbub.appspot.com/subscribe"
+_WEBSUB_HUB = config.WEBSUB_HUB_URL
 
 # Lease duration to request — 7 days (604800 s).  We re-subscribe at T-24 h.
-_LEASE_SECONDS = 604800
+_LEASE_SECONDS = config.WEBSUB_LEASE_SECONDS
 
 # oEmbed endpoint — used for lightweight content-type classification
 _OEMBED_URL = "https://www.youtube.com/oembed?url={url}&format=json"
@@ -537,16 +537,15 @@ class YouTubeTracker(commands.Cog):
         self, request: aiohttp.web.Request
     ) -> aiohttp.web.Response:
         """Handle incoming Atom push notification (POST) from Google."""
-        # Cap body at 512 KB — a legitimate YouTube Atom push is under 10 KB.
+        # Cap body — a legitimate YouTube Atom push is under 10 KB.
         # Reject oversized payloads early to prevent memory exhaustion.
-        _MAX_BODY = 512 * 1024
         try:
             body = await request.read()
         except Exception as exc:
             logger.warning("[WebSub] Could not read push body: %s", exc)
             return aiohttp.web.Response(status=400)
 
-        if len(body) > _MAX_BODY:
+        if len(body) > config.WEBSUB_MAX_BODY_BYTES:
             logger.warning(
                 "[WebSub] Push payload too large (%d bytes) — rejecting.", len(body)
             )
@@ -1828,7 +1827,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
     @bot.tree.command(name="setup_logs", description="Create or map categorized server audit log channels.")
     @is_trusted_or_owner()
     @app_commands.describe(
-        auto_create="Create the 📁 SERVER LOGS category and all 8 log channels automatically.",
+        auto_create=f"Create the {config.LOG_CATEGORY_NAME} category and all 8 log channels automatically.",
         type="For manual mapping: chat/member/profile/role/channel/server/voice/mod.",
         channel="Existing text channel to use for the selected log type.",
     )

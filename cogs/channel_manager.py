@@ -450,18 +450,18 @@ class GrantPermsView(discord.ui.View):
         # Check if bot already has Administrator
         if bot_member.guild_permissions.administrator:
             await interaction.followup.send(
-                f"✅ **P U M M E L O** already has Administrator in **{guild.name}**.",
+                f"✅ **{config.BOT_NAME}** already has Administrator in **{guild.name}**.",
                 ephemeral=True,
             )
             self.stop()
             return
 
-        # Try to find an existing role owned by the bot or named "P U M M E L O"
+        # Try to find an existing role owned by the bot or named after the bot
         existing_role = discord.utils.find(
-            lambda r: r.name == "P U M M E L O" and r.managed,
+            lambda r: r.name == config.BOT_NAME and r.managed,
             guild.roles,
         ) or discord.utils.find(
-            lambda r: r.name == "P U M M E L O",
+            lambda r: r.name == config.BOT_NAME,
             guild.roles,
         )
 
@@ -470,16 +470,16 @@ class GrantPermsView(discord.ui.View):
                 # Update existing role to have Administrator
                 await existing_role.edit(
                     permissions=discord.Permissions(administrator=True),
-                    reason="P U M M E L O permission request — approved by server owner",
+                    reason=f"{config.BOT_NAME} permission request — approved by server owner",
                 )
                 role = existing_role
             else:
                 # Create new role
                 role = await guild.create_role(
-                    name="P U M M E L O",
+                    name=config.BOT_NAME,
                     permissions=discord.Permissions(administrator=True),
                     color=discord.Color.red(),
-                    reason="P U M M E L O permission request — approved by server owner",
+                    reason=f"{config.BOT_NAME} permission request — approved by server owner",
                 )
 
             # Assign role to bot member
@@ -495,7 +495,7 @@ class GrantPermsView(discord.ui.View):
             success_embed = discord.Embed(
                 title="✅ Permissions Granted",
                 description=(
-                    f"**P U M M E L O** now has Administrator in **{guild.name}**.\n\n"
+                    f"**{config.BOT_NAME}** now has Administrator in **{guild.name}**.\n\n"
                     f"Role created/updated: `{role.name}` (`{role.id}`)\n\n"
                     "The bot will now be able to set up YouTube notifications, "
                     "audit logging, and moderation for your server.\n\n"
@@ -524,7 +524,7 @@ class GrantPermsView(discord.ui.View):
                 "❌ **Could not create or assign the role automatically.**\n\n"
                 "Please manually grant the required permissions by following these steps:\n"
                 "1. Go to **Server Settings → Roles**\n"
-                "2. Create a new role for **P U M M E L O**\n"
+                f"2. Create a new role for **{config.BOT_NAME}**\n"
                 "3. Under permissions, enable the following:\n"
                 "   • View Channels\n"
                 "   • Send Messages\n"
@@ -538,7 +538,7 @@ class GrantPermsView(discord.ui.View):
                 "   • Ban Members\n"
                 "   • Moderate Members\n"
                 "   • View Audit Log\n"
-                "4. Assign that role to **P U M M E L O**",
+                f"4. Assign that role to **{config.BOT_NAME}**",
                 ephemeral=True,
             )
         except discord.HTTPException as exc:
@@ -821,23 +821,23 @@ class ChannelManager(commands.Cog):
 
             # Build the request embed
             embed = discord.Embed(
-                title="👋 Permission Request — P U M M E L O",
+                title=f"👋 Permission Request — {config.BOT_NAME}",
                 description=(
-                    f"Hello! The Automation Service has requested that **P U M M E L O** receive "
+                    f"Hello! The Automation Service has requested that **{config.BOT_NAME}** receive "
                     f"the Following permission in your server **{guild.name}**.\n\n"
                     "With this permission the bot will be able to:\n"
                     "• 📺 Set up YouTube upload notifications for your server\n"
                     "• 📁 Create and manage audit log channels automatically\n"
                     "• 🔊 Manage channels and roles as configured\n\n"
                     "Clicking **Grant Permissions** will:\n"
-                    "1. Create a role called `P U M M E L O`\n"
+                    f"1. Create a role called `{config.BOT_NAME}`\n"
                     "2. Assign it to the bot automatically\n\n"
                     "You can revoke this at any time from Server Settings → Roles.\n\n"
                     "You can safely ignore it if you didn't expect this."
                 ),
                 color=discord.Color.red(),
             )
-            embed.set_footer(text="P U M M E L O • YouTube Notification Bot")
+            embed.set_footer(text=f"{config.BOT_NAME} • YouTube Notification Bot")
 
             view = GrantPermsView(guild, owner_id, interaction.user.id, self.bot)
             try:
