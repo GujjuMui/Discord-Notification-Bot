@@ -485,7 +485,7 @@ class GrantPermsView(discord.ui.View):
             # Assign role to bot member
             await bot_member.add_roles(
                 role,
-                reason="P U M M E L O permission request — approved by server owner",
+                reason=f"{config.BOT_NAME} permission request — approved by server owner",
             )
 
             # Disable buttons

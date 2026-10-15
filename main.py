@@ -293,7 +293,8 @@ async def on_ready() -> None:
 
     logger.info("Logged in as %s (%s)", bot.user, bot.user.id if bot.user else "?")
     logger.info("Connected to %d guild(s).", len(bot.guilds))
-    logger.info("Loaded Cogs: YouTubeTracker, ServerLogger, Utility, Moderation")
+    loaded_cogs = ", ".join(bot.cogs.keys())
+    logger.info("Loaded Cogs: %s", loaded_cogs)
     logger.info("Database tables synchronized: %s", table_counts)
     if server_logger:
         logger.info("Categorized server logging is loaded.")

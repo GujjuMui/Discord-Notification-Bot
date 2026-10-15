@@ -81,7 +81,7 @@ except ValueError:
 
 # WEBSUB_HUB_URL — Google's PubSubHubbub hub endpoint.
 #                  Only change this if Google migrates to a new hub URL.
-gitWEBSUB_HUB_URL: str = os.getenv("WEBSUB_HUB_URL", "https://pubsubhubbub.appspot.com/subscribe")
+WEBSUB_HUB_URL: str = os.getenv("WEBSUB_HUB_URL", "https://pubsubhubbub.appspot.com/subscribe")
 
 # WEBSUB_LEASE_SECONDS — requested WebSub lease duration in seconds.
 #                        Default 604800 (7 days). Bot re-subscribes at T-24h.

@@ -1725,7 +1725,7 @@ def setup_commands(bot: commands.Bot, tracker: YouTubeTracker) -> None:
             value=f"[Support]({repo_url}/issues) • [Invite]({invite}) • [GitHub]({repo_url}) • [Docs]({repo_url}#readme)",
             inline=False,
         )
-        embed.set_footer(text=f"v{getattr(interaction.client, 'bot_version', '3.2.0')} • Developed / powered by GujjuMui")
+        embed.set_footer(text=f"v{getattr(interaction.client, 'bot_version', config.BOT_VERSION)} • Developed / powered by GujjuMui")
         await interaction.response.send_message(embed=embed)
 
     # ── /help ─────────────────────────────────────────────────────────
