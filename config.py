@@ -71,7 +71,7 @@ except ValueError:
 # FALLBACK_POLL_INTERVAL — seconds between RSS fallback polls.
 #                          Default 60s — runs every minute as an active safety
 #                          net alongside WebSub push. Catches any pushes Google
-#                          delays or fails to deliver.
+#                          delays or fails t    o deliver.
 #                          Min: 60 (enforced in cog_load).
 _fallback_raw = os.getenv("FALLBACK_POLL_INTERVAL", "60").strip()
 try:

@@ -1538,7 +1538,20 @@ class YouTubeTracker(commands.Cog):
         channel_name_override: Optional[str] = None,
     ) -> dict[str, Any]:
         channel_id, resolved_name = await self.resolve_channel_id(url)
-        feed_items = await self.fetch_feed(channel_id)
+        try:
+            feed_items = await self.fetch_feed(channel_id)
+        except aiohttp.ClientResponseError as exc:
+            if exc.status == 404:
+                # Normal for brand-new channels or channels with no public videos yet.
+                # Add the channel anyway — WebSub push will deliver the first notification.
+                logger.info(
+                    "[add_channel] RSS feed 404 for %s — no public videos yet, "
+                    "adding anyway (WebSub will handle first upload).",
+                    channel_id,
+                )
+                feed_items = []
+            else:
+                raise
 
         detected_name = next(
             (
