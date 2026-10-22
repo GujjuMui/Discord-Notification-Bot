@@ -17,7 +17,6 @@ import config
 from cogs.server_logger import ServerLogger
 from cogs.youtube_tracker import YouTubeTracker, setup_commands
 from cogs.utility import Utility
-from cogs.moderation import Moderation
 from cogs.channel_manager import ChannelManager
 from utils.helpers import format_mentions
 
@@ -146,13 +145,6 @@ async def setup_bot() -> None:
 
     utility = Utility(bot)
     await bot.add_cog(utility)
-
-    if config.ENABLE_MODERATION:
-        moderation = Moderation(bot)
-        await bot.add_cog(moderation)
-        logger.info("Moderation cog loaded (ENABLE_MODERATION=true).")
-    else:
-        logger.info("Moderation cog disabled (set ENABLE_MODERATION=true to enable).")
 
     if config.ENABLE_CHANNEL_MANAGER:
         channel_manager = ChannelManager(bot)

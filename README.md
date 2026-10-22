@@ -1,6 +1,6 @@
 # P U M M E L O — Discord Notification Bot
 
-A production-grade Discord bot delivering **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine, full **8-channel categorized server audit logging**, a **moderation suite** with pre-flight safety checks, and multi-channel **broadcast** announcements.
+A production-grade Discord bot delivering **instant YouTube upload notifications** via Google's WebSub (PubSubHubbub) push engine and full **8-channel categorized server audit logging**.
 
 **Version:** 3.3.1 | **Python:** 3.11+ | **discord.py:** 2.7.1 | **Deployed on:** Railway
 
@@ -12,10 +12,7 @@ A production-grade Discord bot delivering **instant YouTube upload notifications
 - **Content-type detection** — classifies Videos, Shorts, Live Streams, and Community Posts via oEmbed + HEAD redirect
 - **Per-route configuration** — each YouTube channel can post to a different Discord channel, with its own role ping and content filter
 - **8-channel audit logging** — chat, member, profile, role, channel, server, voice, and moderation events
-- **Moderation suite** — `/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge` with full pre-flight hierarchy and permission checks; also available as `!` prefix commands
-- **Broadcast** — send announcements to up to 10 channels simultaneously with image/GIF support
 - **RBAC trust system** — bot owner → server owner → trusted users; all admin commands are gated
-- **Demo mode** — intercepts destructive actions and returns simulated embeds (no real execution)
 - **WebSub lease auto-renewal** — subscriptions renew 24h before 7-day expiry
 - **SQLite + WAL mode** — concurrent-safe, Railway volume-persistent
 
@@ -62,7 +59,6 @@ Discord Notification Bot/
 │   ├── server_logger.py     # 8-channel categorized audit logging
 │   ├── channel_manager.py   # Owner-only /channelmanager, /leaveguild, permission requests
 │   ├── utility.py           # /say, /announcement, /edit_say
-│   └── moderation.py        # Moderation suite, diagnostics, broadcast
 └── utils/
     └── helpers.py           # Discord mention formatting utilities
 ```
@@ -83,13 +79,8 @@ Copy `.env.example` to `.env` and fill in the values.
 | `WEBHOOK_PORT` | Optional | `8080` | Port the embedded aiohttp webhook server listens on |
 | `FALLBACK_POLL_INTERVAL` | Optional | `60` | RSS fallback poll interval in seconds (min 60) |
 | `ALLOWED_GUILD_IDS` | Optional | `""` (open) | Comma-separated guild IDs to restrict bot operation |
-| `ENABLE_MODERATION` | Optional | `false` | Enable moderation cog |
 | `ENABLE_CHANNEL_MANAGER` | Optional | `false` | Enable channel manager cog |
 | `BOT_NAME` | Optional | `P U M M E L O` | Bot display name for permission requests and roles |
-| `DEMO_MODE` | Optional | `false` | Set `true` to enable demo/simulation mode |
-| `DEMO_GUILD_ID` | Optional | — | Guild ID where demo mode intercepts destructive actions |
-| `DEMO_AUDIT_LOG_CHANNEL` | Optional | — | Channel ID for demo mode audit log events |
-| `TEST_CHANNEL_ID` | Optional | — | Channel ID where `/testmessage` is allowed to post |
 
 ---
 
@@ -156,39 +147,12 @@ The bot exposes `GET /health` → `200 OK` used by Railway's healthcheck (`railw
 
 **Content type filters:** `all` · `videos` · `shorts` · `live` · `community`
 
-### Moderation (Slash + Prefix)
-
-| Command | Parameters | Permission | Description |
-|---|---|---|---|
-| `/ban` / `!ban` | `@user` `[reason]` `[days]` | Staff | Ban a member (pre-flight checked) |
-| `/kick` / `!kick` | `@user` `[reason]` | Staff | Kick a member |
-| `/timeout` / `!timeout` | `@user` `<minutes>` `[reason]` | Staff | Timeout a member (1–40320 min) |
-| `/untimeout` / `!untimeout` | `@user` `[reason]` | Staff | Remove an active timeout |
-| `/purge` / `!purge` | `<1-100>` `[@user]` | Staff | Bulk-delete messages (max 14 days) |
-| `/userinfo` / `!userinfo` | `[@user]` | Public | Show member info, roles, hierarchy rank |
-| `/serverinfo` / `!serverinfo` | — | Public | Show server stats, boost level, verification |
-| `/permissions` | — | Public | Show bot's effective permissions in this channel |
-| `/checkaccess` | `<action>` `@user` | Staff | Pre-flight check — would this action succeed? |
-
 ### Channel Manager (Owner-Only, DM-compatible)
 
 | Command | Parameters | Permission | Description |
 |---|---|---|---|
 | `/channelmanager` | — | Owner | Guild picker → list / create / delete channels across any guild from DMs. Requires `Manage Channels` in target guild. |
 | `/leaveguild` | — | Owner | Guild picker dropdown → confirm → bot leaves the selected server immediately |
-
-### Diagnostics (Owner-Only)
-
-| Command | Parameters | Description |
-|---|---|---|
-| `/permaudit` | — | Check all guilds for missing permissions — shows ✅ fully authorized vs ⚠️ missing with per-guild breakdown |
-| `/listyt_all` | — | Cross-guild YouTube tracking audit grouped by guild |
-| `/guildlist` | — | All servers with ✅/⚠️ authorization status (also `!guildlist`) |
-| `/checkpermissions` | `[guild_id]` | Per-channel permission matrix |
-| `/checkcommands` | — | List all commands with access tiers |
-| `/diagnose` | — | Full system health check |
-| `/testmoderation` | `<action>` `@user` | Dry-run all 5 validation stages |
-| `/testmessage` | `[layout]` `[image_url]` | Send test embed to TEST_CHANNEL_ID |
 
 ### Broadcast & Utility
 
@@ -277,7 +241,6 @@ First push after a new subscription has 5–20 min Google hub latency (normal). 
 - Mention injection prevention: YouTube content cannot inject `@everyone` or role pings
 - WebSub push guard: rejects pushes from untracked channel IDs before classification
 - RBAC: admin commands gated by bot owner / server owner / trusted users
-- Demo mode: `DEMO_MODE=true` + `DEMO_GUILD_ID` intercepts all destructive actions
 
 ---
 
@@ -289,7 +252,6 @@ First push after a new subscription has 5–20 min Google hub latency (normal). 
 - Added comprehensive documentation for all new environment variables in `.env.example` and `README.md`
 
 ### v3.2.0
-- New `cogs/moderation.py`: full moderation suite (`/ban`, `/kick`, `/timeout`, `/untimeout`, `/purge`), prefix command equivalents (`!ban`, etc.), `/userinfo`, `/serverinfo`, `/permissions`, `/checkaccess`, `/broadcast` (up to 10 channels, GIF/image support), owner diagnostics (`/diagnose`, `/checkpermissions`, `/checkcommands`, `/testmoderation`, `/testmessage`), demo mode engine
 - `/help` updated: 7 categories covering all commands including new moderation and utility sections
 - `/about` footer now tracks live bot version
 

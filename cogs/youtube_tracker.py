@@ -186,10 +186,6 @@ class HelpSelect(discord.ui.Select):
                 value="logging", emoji="📁",
                 description="Configure the 8-channel server logging system."),
             discord.SelectOption(
-                label=("Moderation & Broadcast" if admin_view else "Moderation & Broadcast 🔒 Staff/Owner"),
-                value="moderation", emoji="🛡️",
-                description="Ban, kick, timeout, purge, broadcast, and diagnostics."),
-            discord.SelectOption(
                 label=("Announcements & Utility" if admin_view else "Announcements & Utility 🔒 Admin/Trusted"),
                 value="utility", emoji="📢",
                 description="/say, /announcement, /edit_say commands."),
@@ -206,7 +202,7 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(
                 label=("Owner Tools" if admin_view else "Owner Tools 🔒 Owner Only"),
                 value="ownertools", emoji="👑",
-                description="/listyt_all, /guildlist, /permaudit, /diagnose, /channelmanager."),
+                description="/listyt_all, /guildlist, /permaudit, /channelmanager."),
         ]
         super().__init__(placeholder="Select a help category…", min_values=1, max_values=1, options=options)
 
@@ -223,12 +219,11 @@ class HelpSelect(discord.ui.Select):
                 title="🏠 Overview & Getting Started",
                 description=(
                     "**P U M M E L O** combines YouTube feed routing with full "
-                    "categorized server audit logging and a moderation suite.\n\n"
+                    "categorized server audit logging.\n\n"
                     "**Quick start:**\n"
                     "1. `/about` — see live bot stats\n"
                     "2. `/add_yt` — route a YouTube channel to a Discord channel\n"
-                    "3. `/setup_logs` — configure 8-channel audit logging\n"
-                    "4. `/broadcast` — send announcements to multiple channels at once"
+                    "3. `/setup_logs` — configure 8-channel audit logging"
                 ),
                 color=discord.Color.blurple(),
             ),
@@ -264,25 +259,6 @@ class HelpSelect(discord.ui.Select):
                 ),
                 color=discord.Color.gold(),
             ),
-            "moderation": discord.Embed(
-                title="🛡️ Moderation & Broadcast",
-                description=(
-                    ("🔒 Staff/Owner Required\n\n" if locked else "")
-                    + "**Moderation** (slash + prefix):\n"
-                      "`/ban @user [reason] [days]` / `!ban @user [reason]`\n"
-                      "`/kick @user [reason]` / `!kick @user [reason]`\n"
-                      "`/timeout @user <minutes> [reason]` / `!timeout @user <min> [reason]`\n"
-                      "`/untimeout @user [reason]` / `!untimeout @user [reason]`\n"
-                      "`/purge <1-100> [@user]` / `!purge <1-100> [@user]`\n\n"
-                      "**Info** (public):\n"
-                      "`/userinfo [@user]` · `/serverinfo` · `/permissions` · `/checkaccess <action> @user`\n\n"
-                      "**Broadcast** (staff):\n"
-                      "`/broadcast <message> <#ch1> ... [#ch10] [image_url] [ping_role]`\n\n"
-                      "**Owner diagnostics:**\n"
-                      "`/diagnose` · `/checkpermissions` · `/checkcommands` · `/testmoderation` · `/testmessage`"
-                ),
-                color=discord.Color(0xFF3B30),
-            ),
             "utility": discord.Embed(
                 title="📢 Announcements & Utility",
                 description=(
@@ -315,8 +291,7 @@ class HelpSelect(discord.ui.Select):
                 description=(
                     "`/botstatus` — live dashboard: RAM, CPU, gateway, RSS, WebSub status *(Admin/Trusted)*\n"
                     "`/about` — public bot profile with live server count, feed count, uptime, and latency\n"
-                    "`/sync` — manually sync the global slash command tree *(Admin/Trusted)*\n"
-                    "`/diagnose` — automated system health check *(Owner only)*"
+                    "`/sync` — manually sync the global slash command tree *(Admin/Trusted)*"
                 ),
                 color=discord.Color.blue(),
             ),
@@ -347,12 +322,7 @@ class HelpSelect(discord.ui.Select):
                     "  Also available as `!guildlist` prefix command\n\n"
                     "`/permaudit` — check which guilds have all required permissions\n"
                     "  Full matrix: send, embed, ban, kick, timeout, manage channels, audit log\n\n"
-                    "`/channelmanager` — DM-based channel create/delete across all guilds\n\n"
-                    "`/diagnose` — full system health check (intents, perms, WebSub, DB)\n\n"
-                    "`/checkpermissions [guild_id]` — per-channel permission matrix\n\n"
-                    "`/checkcommands` — registered command list with access tiers\n\n"
-                    "`/testmoderation <action> @user` — dry-run moderation validation\n\n"
-                    "`/testmessage [layout] [image_url]` — send test embed to TEST_CHANNEL_ID"
+                    "`/channelmanager` — DM-based channel create/delete across all guilds"
                 ),
                 color=discord.Color(0xAF52DE),
             ),
